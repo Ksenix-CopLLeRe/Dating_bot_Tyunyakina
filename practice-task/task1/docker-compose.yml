@@ -1,0 +1,10 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    container_name: task1
+    volumes:
+      - ./data:/app/data
+      - ./store.db:/app/store.db
+    command: python main.py
