@@ -1,0 +1,6 @@
+broker,queue,duration_sec,received,errors,real_msg_per_sec,avg_latency_ms,p95_latency_ms,max_latency_ms
+redis,test_queue,30.0,1,0,0.03,2.53,2.53,2.53
+redis,test_queue,30.0,21837,0,727.88,0.37,0.89,13.05
+redis,test_queue,30.0,26413,0,880.42,0.32,0.56,10.68
+redis,test_queue,30.0,26445,0,881.48,0.54,1.07,42.36
+rabbit,test_queue,30.0,26829,0,894.29,0.65,1.55,21.84
