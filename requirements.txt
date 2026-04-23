@@ -1,8 +1,8 @@
-fastapi
-uvicorn
-sqlalchemy
-psycopg2-binary
-python-dotenv
-pydantic
-aiogram
-requests
+aiogram==3.20.0.post0
+aiohttp==3.11.18
+fastapi==0.115.12
+pydantic==2.11.4
+psycopg2-binary==2.9.10
+python-dotenv==1.1.0
+sqlalchemy==2.0.40
+uvicorn==0.34.2

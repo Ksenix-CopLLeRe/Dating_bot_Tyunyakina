@@ -1,4 +1,6 @@
-from pydantic import BaseModel
+from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict
 
 
 class UserCreate(BaseModel):
@@ -7,9 +9,20 @@ class UserCreate(BaseModel):
 
 
 class UserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     telegram_id: str
-    username: str
+    username: str | None = None
+    created_at: datetime
 
-    class Config:
-        from_attributes = True
+
+class RegistrationResponse(BaseModel):
+    user: UserResponse
+    created: bool
+    message: str
+
+
+class HealthResponse(BaseModel):
+    status: str
+    database: str
