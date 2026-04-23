@@ -3,9 +3,11 @@ import logging
 import os
 
 import aiohttp
-from aiogram import Bot, Dispatcher
-from aiogram.filters import Command, CommandStart
-from aiogram.types import Message
+from aiogram import Bot, Dispatcher, F
+from aiogram.filters import Command, CommandObject, CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import BotCommand, KeyboardButton, Message, ReplyKeyboardMarkup
 from dotenv import load_dotenv
 
 
@@ -28,87 +30,635 @@ logger = logging.getLogger("dating-bot")
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+BTN_CREATE_PROFILE = "Создать анкету"
+BTN_UPDATE_PROFILE = "Обновить анкету"
+BTN_MY_PROFILE = "Моя анкета"
+BTN_DELETE_PROFILE = "Удалить анкету"
+BTN_BROWSE = "Смотреть анкеты"
+BTN_LIKE = "Лайк"
+BTN_SKIP = "Пропустить"
+BTN_MATCHES = "Мои мэтчи"
+BTN_RATING = "Мой рейтинг"
+BTN_HELP = "Помощь"
+BTN_CANCEL = "Отмена"
+BTN_DIALOG = "Начать диалог"
 
-async def register_user(telegram_id: str, username: str | None) -> dict:
-    payload = {"telegram_id": telegram_id, "username": username}
+GENDER_WOMAN = "Женщина"
+GENDER_MAN = "Мужчина"
+PREF_ANY = "Без фильтра"
 
+
+class ProfileForm(StatesGroup):
+    age = State()
+    gender = State()
+    city = State()
+    interests = State()
+    bio = State()
+    photo = State()
+    preferred_gender = State()
+    preferred_age_min = State()
+    preferred_age_max = State()
+    preferred_city = State()
+
+
+class DialogForm(StatesGroup):
+    target_telegram_id = State()
+
+
+PROFILE_STEPS = [
+    ("age", "Укажи возраст числом, например `24`."),
+    ("gender", "Выбери пол кнопкой ниже."),
+    ("city", "Укажи город."),
+    ("interests", "Напиши интересы через запятую."),
+    ("bio", "Коротко расскажи о себе."),
+    ("photo", "Прикрепи фотографию одним сообщением."),
+    ("preferred_gender", "Кто тебе интересен? Выбери кнопкой ниже."),
+    ("preferred_age_min", "Минимальный возраст кандидата. Если без фильтра, нажми `Без фильтра`."),
+    ("preferred_age_max", "Максимальный возраст кандидата. Если без фильтра, нажми `Без фильтра`."),
+    ("preferred_city", "Предпочитаемый город. Если без фильтра, нажми `Без фильтра`."),
+]
+
+
+def main_menu_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=BTN_CREATE_PROFILE), KeyboardButton(text=BTN_UPDATE_PROFILE)],
+            [KeyboardButton(text=BTN_MY_PROFILE), KeyboardButton(text=BTN_BROWSE)],
+            [KeyboardButton(text=BTN_MATCHES), KeyboardButton(text=BTN_RATING)],
+            [KeyboardButton(text=BTN_DIALOG), KeyboardButton(text=BTN_DELETE_PROFILE)],
+            [KeyboardButton(text=BTN_HELP)],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def browse_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=BTN_LIKE), KeyboardButton(text=BTN_SKIP)],
+            [KeyboardButton(text=BTN_MATCHES), KeyboardButton(text=BTN_RATING)],
+            [KeyboardButton(text=BTN_MY_PROFILE), KeyboardButton(text=BTN_HELP)],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def cancel_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=BTN_CANCEL)]],
+        resize_keyboard=True,
+    )
+
+
+def gender_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=GENDER_WOMAN), KeyboardButton(text=GENDER_MAN)]],
+        resize_keyboard=True,
+    )
+
+
+def preference_gender_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=GENDER_WOMAN), KeyboardButton(text=GENDER_MAN)],
+            [KeyboardButton(text=PREF_ANY)],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def any_filter_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=PREF_ANY)], [KeyboardButton(text=BTN_CANCEL)]],
+        resize_keyboard=True,
+    )
+
+
+async def configure_bot_commands() -> None:
+    await bot.set_my_commands(
+        [
+            BotCommand(command="start", description="Запустить бота"),
+            BotCommand(command="help", description="Показать помощь"),
+            BotCommand(command="cancel", description="Отменить текущее действие"),
+        ]
+    )
+
+
+async def api_request(
+    method: str,
+    path: str,
+    *,
+    json_data: dict | None = None,
+) -> tuple[int, dict]:
     async with aiohttp.ClientSession() as session:
-        async with session.post(
-            f"{BACKEND_URL}/users/register",
-            json=payload,
-            timeout=aiohttp.ClientTimeout(total=10),
+        async with session.request(
+            method,
+            f"{BACKEND_URL}{path}",
+            json=json_data,
+            timeout=aiohttp.ClientTimeout(total=20),
         ) as response:
-            response.raise_for_status()
-            return await response.json()
+            payload = await response.json(content_type=None)
+            return response.status, payload
 
 
-async def fetch_backend_health() -> dict:
-    async with aiohttp.ClientSession() as session:
-        async with session.get(
-            f"{BACKEND_URL}/health",
-            timeout=aiohttp.ClientTimeout(total=10),
-        ) as response:
-            response.raise_for_status()
-            return await response.json()
+def telegram_id_from_message(message: Message) -> str:
+    return str(message.from_user.id)
 
 
-@dp.message(CommandStart())
-async def start(message: Message):
-    telegram_id = str(message.from_user.id)
+def normalize_choice(raw_value: str) -> str:
+    value = raw_value.strip()
+    if value == GENDER_WOMAN:
+        return "женщина"
+    if value == GENDER_MAN:
+        return "мужчина"
+    return value.lower()
+
+
+def nullable_value(raw_value: str) -> str | None:
+    stripped = raw_value.strip()
+    if stripped in {"-", PREF_ANY}:
+        return None
+    return normalize_choice(stripped)
+
+
+def build_profile_payload(data: dict) -> dict:
+    return {
+        "age": int(data["age"]),
+        "gender": normalize_choice(data["gender"]),
+        "city": data["city"].strip(),
+        "interests": data["interests"].strip(),
+        "bio": data["bio"].strip(),
+        "photo_url": data["photo_file_id"],
+        "preferred_gender": nullable_value(data["preferred_gender"]),
+        "preferred_age_min": None
+        if data["preferred_age_min"].strip() in {"-", PREF_ANY}
+        else int(data["preferred_age_min"]),
+        "preferred_age_max": None
+        if data["preferred_age_max"].strip() in {"-", PREF_ANY}
+        else int(data["preferred_age_max"]),
+        "preferred_city": None
+        if data["preferred_city"].strip() in {"-", PREF_ANY}
+        else data["preferred_city"].strip(),
+    }
+
+
+def format_profile(profile: dict) -> str:
+    return (
+        "Твоя анкета:\n"
+        f"Возраст: {profile.get('age', 'не указан')}\n"
+        f"Пол: {profile.get('gender', 'не указан')}\n"
+        f"Город: {profile.get('city', 'не указан')}\n"
+        f"Интересы: {profile.get('interests', 'не указаны')}\n"
+        f"О себе: {profile.get('bio', 'не указано')}\n"
+        f"Предпочитаемый пол: {profile.get('preferred_gender') or 'без фильтра'}\n"
+        f"Возраст кандидата: {profile.get('preferred_age_min') or '-'} - {profile.get('preferred_age_max') or '-'}\n"
+        f"Предпочитаемый город: {profile.get('preferred_city') or 'без фильтра'}"
+    )
+
+
+def format_candidate(candidate: dict) -> str:
+    profile = candidate["profile"]
+    rating = candidate.get("rating")
+    rating_text = (
+        f"Рейтинг: {rating['final_score']:.1f} "
+        f"(L1: {rating['level1_score']:.1f}, L2: {rating['level2_score']:.1f})"
+        if rating
+        else "Рейтинг: еще не рассчитан"
+    )
+    return (
+        "Кандидат для знакомства:\n"
+        f"Username: {candidate.get('username') or 'без username'}\n"
+        f"Возраст: {profile.get('age')}\n"
+        f"Пол: {profile.get('gender')}\n"
+        f"Город: {profile.get('city')}\n"
+        f"Интересы: {profile.get('interests')}\n"
+        f"О себе: {profile.get('bio')}\n"
+        f"{rating_text}\n"
+        f"Кэшировано кандидатов: {candidate.get('remaining_cached_candidates')}"
+    )
+
+
+async def send_profile_photo(message: Message, photo_file_id: str | None, caption: str) -> None:
+    if photo_file_id:
+        await message.answer_photo(photo=photo_file_id, caption=caption, reply_markup=main_menu_keyboard())
+    else:
+        await message.answer(caption, reply_markup=main_menu_keyboard())
+
+
+async def show_next_candidate(message: Message, candidate: dict | None) -> None:
+    if not candidate:
+        await message.answer("Подходящих анкет сейчас нет.", reply_markup=main_menu_keyboard())
+        return
+
+    profile = candidate["profile"]
+    caption = f"{format_candidate(candidate)}\n\nИспользуй кнопки `Лайк` или `Пропустить`."
+    if profile.get("photo_url"):
+        await message.answer_photo(
+            photo=profile["photo_url"],
+            caption=caption,
+            reply_markup=browse_keyboard(),
+        )
+    else:
+        await message.answer(caption, reply_markup=browse_keyboard())
+
+
+async def continue_profile_form(message: Message, state: FSMContext, next_index: int) -> None:
+    if next_index >= len(PROFILE_STEPS):
+        data = await state.get_data()
+        mode = data["mode"]
+        telegram_id = telegram_id_from_message(message)
+        payload = build_profile_payload(data)
+
+        method = "POST" if mode == "create" else "PUT"
+        status, response = await api_request(method, f"/profiles/{telegram_id}", json_data=payload)
+
+        if status >= 400:
+            await message.answer(
+                f"Не удалось сохранить анкету: {response.get('detail', response)}",
+                reply_markup=main_menu_keyboard(),
+            )
+            return
+
+        await state.clear()
+        await send_profile_photo(
+            message,
+            response.get("photo_url"),
+            f"Анкета сохранена.\n\n{format_profile(response)}",
+        )
+        return
+
+    field_name, prompt = PROFILE_STEPS[next_index]
+    await state.update_data(step_index=next_index)
+    await state.set_state(getattr(ProfileForm, field_name))
+
+    reply_markup = cancel_keyboard()
+    if field_name == "gender":
+        reply_markup = gender_keyboard()
+    elif field_name == "preferred_gender":
+        reply_markup = preference_gender_keyboard()
+    elif field_name in {"preferred_age_min", "preferred_age_max", "preferred_city"}:
+        reply_markup = any_filter_keyboard()
+
+    await message.answer(prompt, reply_markup=reply_markup)
+
+
+async def start_profile_form(message: Message, state: FSMContext, mode: str) -> None:
+    await state.clear()
+    await state.update_data(mode=mode, step_index=0)
+    await message.answer(
+        "Сейчас соберем анкету шаг за шагом.\n"
+        "Если хочешь остановиться, нажми `Отмена`.",
+        reply_markup=cancel_keyboard(),
+    )
+    await continue_profile_form(message, state, 0)
+
+
+async def handle_profile_step(message: Message, state: FSMContext, current_field: str) -> None:
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Нужно отправить текстовое значение.")
+        return
+
+    if current_field == "gender" and text not in {GENDER_WOMAN, GENDER_MAN}:
+        await message.answer("Выбери пол кнопкой ниже.", reply_markup=gender_keyboard())
+        return
+
+    if current_field == "preferred_gender" and text not in {GENDER_WOMAN, GENDER_MAN, PREF_ANY}:
+        await message.answer(
+            "Выбери вариант кнопкой ниже.",
+            reply_markup=preference_gender_keyboard(),
+        )
+        return
+
+    if current_field in {"age", "preferred_age_min", "preferred_age_max"} and text not in {PREF_ANY, "-"}:
+        if not text.isdigit():
+            await message.answer("Здесь нужно число или кнопка `Без фильтра`.")
+            return
+
+    await state.update_data(**{current_field: text})
+    data = await state.get_data()
+    next_index = data["step_index"] + 1
+    await continue_profile_form(message, state, next_index)
+
+
+async def register_user_in_backend(message: Message) -> bool:
+    telegram_id = telegram_id_from_message(message)
     username = message.from_user.username
 
     try:
-        payload = await register_user(telegram_id, username)
+        status, payload = await api_request(
+            "POST",
+            "/users/register",
+            json_data={"telegram_id": telegram_id, "username": username},
+        )
     except aiohttp.ClientError:
         logger.exception("Registration request failed for telegram_id=%s", telegram_id)
         await message.answer(
             "Не получилось связаться с backend-сервисом.\n"
             "Проверь, что API поднят и доступен."
         )
-        return
+        return False
 
-    user = payload["user"]
-    created = payload["created"]
-    status_text = "регистрация завершена" if created else "ты уже был зарегистрирован"
-    username_text = user["username"] or "без username"
+    if status >= 400:
+        await message.answer(f"Ошибка регистрации: {payload}", reply_markup=main_menu_keyboard())
+        return False
+
+    return True
+
+
+@dp.message(CommandStart())
+async def start(message: Message):
+    if not await register_user_in_backend(message):
+        return
 
     await message.answer(
         "Добро пожаловать в Твой Мэтч 🩷🤍\n\n"
         "✅ Твоя регистрация успешно завершена\n\n"
         "Теперь ты можешь создать свою анкету, находить интересных людей и получать "
         "персональные рекомендации для знакомств.\n\n"
-        "✨️ Приятного общения и удачных мэтчей"
+        "✨️ Приятного общения и удачных мэтчей",
+        reply_markup=main_menu_keyboard(),
     )
 
 
 @dp.message(Command("help"))
+@dp.message(F.text == BTN_HELP)
 async def help_command(message: Message):
     await message.answer(
-        "Команды бота:\n"
-        "/start - зарегистрироваться или подтвердить регистрацию\n"
-        "/help - показать список команд\n"
-        "/ping - проверить связь с backend"
+        "Доступные действия:\n"
+        "• Создать анкету\n"
+        "• Обновить анкету\n"
+        "• Посмотреть свою анкету\n"
+        "• Смотреть анкеты\n"
+        "• Ставить лайки и пропуски\n"
+        "• Смотреть мэтчи и рейтинг\n"
+        "• Отметить начало диалога кнопкой `Начать диалог`\n\n"
+        "Основные действия доступны кнопками под полем ввода.",
+        reply_markup=main_menu_keyboard(),
     )
 
 
-@dp.message(Command("ping"))
-async def ping_command(message: Message):
-    try:
-        payload = await fetch_backend_health()
-    except aiohttp.ClientError:
-        logger.exception("Healthcheck request failed")
-        await message.answer("Backend сейчас недоступен.")
+@dp.message(Command("cancel"))
+@dp.message(F.text == BTN_CANCEL)
+async def cancel_command(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Текущее действие отменено.", reply_markup=main_menu_keyboard())
+
+
+@dp.message(F.text == BTN_CREATE_PROFILE)
+@dp.message(Command("create_profile"))
+async def create_profile_command(message: Message, state: FSMContext):
+    await start_profile_form(message, state, "create")
+
+
+@dp.message(F.text == BTN_UPDATE_PROFILE)
+@dp.message(Command("update_profile"))
+async def update_profile_command(message: Message, state: FSMContext):
+    await start_profile_form(message, state, "update")
+
+
+@dp.message(F.text == BTN_MY_PROFILE)
+@dp.message(Command("my_profile"))
+async def my_profile_command(message: Message):
+    status, payload = await api_request("GET", f"/profiles/{telegram_id_from_message(message)}")
+    if status >= 400:
+        await message.answer(
+            f"Не удалось получить анкету: {payload.get('detail', payload)}",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+    await send_profile_photo(message, payload.get("photo_url"), format_profile(payload))
+
+
+@dp.message(F.text == BTN_DELETE_PROFILE)
+@dp.message(Command("delete_profile"))
+async def delete_profile_command(message: Message):
+    status, payload = await api_request("DELETE", f"/profiles/{telegram_id_from_message(message)}")
+    if status >= 400:
+        await message.answer(
+            f"Не удалось удалить анкету: {payload.get('detail', payload)}",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+    await message.answer(payload["message"], reply_markup=main_menu_keyboard())
+
+
+@dp.message(F.text == BTN_BROWSE)
+@dp.message(Command("browse"))
+async def browse_command(message: Message):
+    status, payload = await api_request("GET", f"/profiles/{telegram_id_from_message(message)}/candidate")
+    if status >= 400:
+        await message.answer(
+            f"Не удалось получить кандидата: {payload.get('detail', payload)}",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+    await show_next_candidate(message, payload)
+
+
+@dp.message(F.text == BTN_LIKE)
+@dp.message(Command("like"))
+async def like_command(message: Message):
+    status, payload = await api_request("POST", f"/interactions/{telegram_id_from_message(message)}/like")
+    if status >= 400:
+        await message.answer(
+            f"Не удалось поставить лайк: {payload.get('detail', payload)}",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    await message.answer(payload["message"], reply_markup=browse_keyboard())
+    await show_next_candidate(message, payload.get("next_candidate"))
+
+
+@dp.message(F.text == BTN_SKIP)
+@dp.message(Command("skip"))
+async def skip_command(message: Message):
+    status, payload = await api_request("POST", f"/interactions/{telegram_id_from_message(message)}/skip")
+    if status >= 400:
+        await message.answer(
+            f"Не удалось пропустить анкету: {payload.get('detail', payload)}",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    await message.answer(payload["message"], reply_markup=browse_keyboard())
+    await show_next_candidate(message, payload.get("next_candidate"))
+
+
+@dp.message(F.text == BTN_MATCHES)
+@dp.message(Command("matches"))
+async def matches_command(message: Message):
+    status, payload = await api_request("GET", f"/matches/{telegram_id_from_message(message)}")
+    if status >= 400:
+        await message.answer(
+            f"Не удалось получить мэтчи: {payload.get('detail', payload)}",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    matches = payload.get("matches", [])
+    if not matches:
+        await message.answer("Мэтчей пока нет.", reply_markup=main_menu_keyboard())
+        return
+
+    lines = ["Твои мэтчи:"]
+    for match in matches:
+        profile = match.get("profile") or {}
+        lines.append(
+            f"- {match.get('other_username') or 'без username'} "
+            f"(telegram user id: {match['other_user_id']}, "
+            f"город: {profile.get('city') or 'не указан'}, "
+            f"интересы: {profile.get('interests') or 'не указаны'})"
+        )
+
+    await message.answer("\n".join(lines), reply_markup=main_menu_keyboard())
+
+
+@dp.message(F.text == BTN_RATING)
+@dp.message(Command("rating"))
+async def rating_command(message: Message):
+    status, payload = await api_request("GET", f"/ratings/{telegram_id_from_message(message)}")
+    if status >= 400:
+        await message.answer(
+            f"Не удалось получить рейтинг: {payload.get('detail', payload)}",
+            reply_markup=main_menu_keyboard(),
+        )
         return
 
     await message.answer(
-        "Backend доступен.\n"
-        f"Статус: {payload['status']}\n"
-        f"База данных: {payload['database']}"
+        "Твой рейтинг:\n"
+        f"Level 1: {payload['level1_score']:.1f}\n"
+        f"Level 2: {payload['level2_score']:.1f}\n"
+        f"Итоговый score: {payload['final_score']:.1f}",
+        reply_markup=main_menu_keyboard(),
     )
+
+
+@dp.message(F.text == BTN_DIALOG)
+async def start_dialog_button(message: Message, state: FSMContext):
+    await state.clear()
+    await state.set_state(DialogForm.target_telegram_id)
+    await message.answer(
+        "Отправь `telegram_id` пользователя, с которым хочешь отметить начало диалога.",
+        reply_markup=cancel_keyboard(),
+    )
+
+
+@dp.message(Command("open_dialog"))
+async def open_dialog_command(message: Message, command: CommandObject):
+    if not command.args:
+        await message.answer(
+            "Использование: /open_dialog <telegram_id>",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    other_telegram_id = command.args.strip()
+    status, payload = await api_request(
+        "POST",
+        f"/matches/{telegram_id_from_message(message)}/dialogs/{other_telegram_id}",
+    )
+    if status >= 400:
+        await message.answer(
+            f"Не удалось сохранить начало диалога: {payload.get('detail', payload)}",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    await message.answer(payload["message"], reply_markup=main_menu_keyboard())
+
+
+@dp.message(DialogForm.target_telegram_id)
+async def open_dialog_from_button(message: Message, state: FSMContext):
+    other_telegram_id = (message.text or "").strip()
+    if not other_telegram_id.isdigit():
+        await message.answer("Нужен числовой `telegram_id`.", reply_markup=cancel_keyboard())
+        return
+
+    status, payload = await api_request(
+        "POST",
+        f"/matches/{telegram_id_from_message(message)}/dialogs/{other_telegram_id}",
+    )
+    if status >= 400:
+        await message.answer(
+            f"Не удалось сохранить начало диалога: {payload.get('detail', payload)}",
+            reply_markup=main_menu_keyboard(),
+        )
+        await state.clear()
+        return
+
+    await state.clear()
+    await message.answer(payload["message"], reply_markup=main_menu_keyboard())
+
+
+@dp.message(ProfileForm.age)
+async def profile_age(message: Message, state: FSMContext):
+    await handle_profile_step(message, state, "age")
+
+
+@dp.message(ProfileForm.gender)
+async def profile_gender(message: Message, state: FSMContext):
+    await handle_profile_step(message, state, "gender")
+
+
+@dp.message(ProfileForm.city)
+async def profile_city(message: Message, state: FSMContext):
+    await handle_profile_step(message, state, "city")
+
+
+@dp.message(ProfileForm.interests)
+async def profile_interests(message: Message, state: FSMContext):
+    await handle_profile_step(message, state, "interests")
+
+
+@dp.message(ProfileForm.bio)
+async def profile_bio(message: Message, state: FSMContext):
+    await handle_profile_step(message, state, "bio")
+
+
+@dp.message(ProfileForm.photo, F.photo)
+async def profile_photo(message: Message, state: FSMContext):
+    photo_file_id = message.photo[-1].file_id
+    await state.update_data(photo_file_id=photo_file_id)
+    data = await state.get_data()
+    next_index = data["step_index"] + 1
+    await continue_profile_form(message, state, next_index)
+
+
+@dp.message(ProfileForm.photo)
+async def profile_photo_invalid(message: Message):
+    await message.answer("Нужно отправить именно фотографию одним сообщением.", reply_markup=cancel_keyboard())
+
+
+@dp.message(ProfileForm.preferred_gender)
+async def profile_preferred_gender(message: Message, state: FSMContext):
+    await handle_profile_step(message, state, "preferred_gender")
+
+
+@dp.message(ProfileForm.preferred_age_min)
+async def profile_preferred_age_min(message: Message, state: FSMContext):
+    await handle_profile_step(message, state, "preferred_age_min")
+
+
+@dp.message(ProfileForm.preferred_age_max)
+async def profile_preferred_age_max(message: Message, state: FSMContext):
+    await handle_profile_step(message, state, "preferred_age_max")
+
+
+@dp.message(ProfileForm.preferred_city)
+async def profile_preferred_city(message: Message, state: FSMContext):
+    await handle_profile_step(message, state, "preferred_city")
+
+
+@dp.message(F.text)
+async def fallback_handler(message: Message):
+    await message.answer("Не понял действие. Используй кнопки под полем ввода.", reply_markup=main_menu_keyboard())
 
 
 async def main():
     logger.info("Starting bot polling")
+    await configure_bot_commands()
     await dp.start_polling(bot)
 
 

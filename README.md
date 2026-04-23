@@ -1,159 +1,118 @@
 # Dating Bot
 
-Проект реализует первые два этапа практики по dating-боту:
+Проект закрывает первые три этапа практики по dating-боту:
 
-1. планирование и проектирование системы
-2. базовую функциональность Telegram-бота с регистрацией пользователя
-
-Третий этап пока не реализован полностью: `CRUD` анкет, ранжирование, Redis-кэш, лайки и мэтчи остаются следующим шагом.
+1. планирование и проектирование
+2. базовая функциональность Telegram-бота
+3. система анкет и ранжирования
 
 ## Что реализовано
 
-### Этап 1. Планирование и проектирование
-
-- описана архитектура системы
-- зафиксирована схема данных
-- подготовлена инфраструктура запуска через Docker Compose
-- в коде описаны основные сущности домена: `User`, `Profile`, `Like`, `Match`, `Rating`
-
-### Этап 2. Базовая функциональность
-
+- `FastAPI` backend с `PostgreSQL`
+- `Redis` для кеширования очереди кандидатов
 - Telegram-бот на `aiogram`
-- backend на `FastAPI`
-- регистрация пользователя по команде `/start`
-- повторный `/start` не создает дубликаты
-- команда `/ping` проверяет доступность backend и базы
-
-## Архитектура первых двух этапов
-
-Сейчас проект состоит из трех реально используемых компонентов:
-
-1. `bot`
-   Telegram-бот, который принимает команды пользователя и вызывает backend API.
-2. `backend`
-   HTTP API с базовой бизнес-логикой и регистрацией пользователей.
-3. `db`
-   PostgreSQL, где хранятся пользователи и подготовленные таблицы следующих этапов.
-
-Поток регистрации:
-
-`Telegram User -> Bot -> Backend API -> PostgreSQL`
+- регистрация пользователя через `/start`
+- полный `CRUD` анкет
+- просмотр кандидатов, лайки, пропуски, мэтчи
+- трехуровневый рейтинг с сохранением в таблице `ratings`
+- кеширование следующих 10 кандидатов в `Redis`
+- фиксация начала диалога после мэтча
 
 ## Схема данных
 
-В базе данных подготовлены следующие таблицы:
+В проекте используются таблицы:
 
-### `users`
+- `users`
+- `profiles`
+- `likes`
+- `skips`
+- `matches`
+- `dialog_initiations`
+- `ratings`
 
-- `id`
-- `telegram_id`
-- `username`
-- `created_at`
+## Как работает третий этап
 
-### `profiles`
+### Анкеты
 
-- `id`
-- `user_id`
-- `age`
-- `gender`
-- `city`
-- `interests`
+Пользователь создает или редактирует анкету с полями:
+
+- возраст
+- пол
+- город
+- интересы
 - `bio`
 - `photo_url`
-- `preferred_gender`
-- `preferred_age_min`
-- `preferred_age_max`
-- `preferred_city`
-- `created_at`
-- `updated_at`
+- предпочтения по полу, возрасту и городу
 
-### `likes`
+### Ранжирование
 
-- `id`
-- `from_user_id`
-- `to_user_id`
-- `created_at`
+Рейтинг хранится в таблице `ratings` и пересчитывается при изменении анкеты и взаимодействиях.
 
-### `matches`
+- `Level 1`: полнота анкеты, фото, заполненные предпочтения
+- `Level 2`: лайки, соотношение лайков и пропусков, мэтчи, начало диалогов, недавняя активность
+- `Final score`: `0.5 * level1 + 0.5 * level2`
 
-- `id`
-- `user1_id`
-- `user2_id`
-- `created_at`
+### Redis-кеш
 
-### `ratings`
+Для каждого пользователя backend хранит в `Redis` очередь кандидатов.
 
-- `user_id`
-- `level1_score`
-- `level2_score`
-- `final_score`
-- `updated_at`
+- при первом запросе кандидата backend подбирает и ранжирует анкеты
+- в кеш попадает до 10 следующих кандидатов
+- после лайка или пропуска текущий кандидат удаляется из очереди
+- когда кеш почти закончился, backend автоматически подгружает новую пачку
 
 ## API
 
-### `GET /`
+Основные endpoint'ы:
 
-Проверка, что backend запущен.
-
-### `GET /health`
-
-Проверка доступности backend и соединения с базой данных.
-
-### `POST /users/register`
-
-Регистрирует пользователя по `telegram_id`. Если пользователь уже есть, возвращает существующую запись.
-
-Пример тела запроса:
-
-```json
-{
-  "telegram_id": "123456789",
-  "username": "demo_user"
-}
-```
-
-### `GET /users/by-telegram/{telegram_id}`
-
-Возвращает пользователя по Telegram ID.
+- `POST /users/register`
+- `POST /profiles/{telegram_id}`
+- `GET /profiles/{telegram_id}`
+- `PUT /profiles/{telegram_id}`
+- `DELETE /profiles/{telegram_id}`
+- `GET /profiles/{telegram_id}/candidate`
+- `GET /profiles/{telegram_id}/queue-state`
+- `POST /interactions/{telegram_id}/like`
+- `POST /interactions/{telegram_id}/skip`
+- `GET /matches/{telegram_id}`
+- `POST /matches/{telegram_id}/dialogs/{other_telegram_id}`
+- `GET /ratings/{telegram_id}`
+- `GET /health`
 
 ## Команды бота
 
-- `/start` - регистрация пользователя
-- `/help` - список доступных команд
-- `/ping` - проверка связи с backend
+- `/start`
+- `/help`
+- `/ping`
+- `/create_profile`
+- `/update_profile`
+- `/my_profile`
+- `/delete_profile`
+- `/browse`
+- `/like`
+- `/skip`
+- `/matches`
+- `/rating`
+- `/open_dialog <telegram_id>`
+- `/cancel`
 
 ## Быстрый старт
 
-1. Создать `.env` на основе `.env.example`
-2. Указать реальный `BOT_TOKEN`
-3. Запустить проект:
+1. Создай `.env` на основе `.env.example`
+2. Укажи реальный `BOT_TOKEN`
+3. Запусти проект:
 
 ```bash
 docker compose up --build
 ```
 
-После запуска:
+После запуска будут подняты:
 
-- backend будет доступен на `http://localhost:8000`
-- PostgreSQL будет доступен на `localhost:5432`
+- `db` на `localhost:5432`
+- `redis` на `localhost:6379`
+- `backend` на `http://localhost:8000`
+- `bot`
 
-## Структура проекта
+## Важно
 
-```text
-backend/
-bot/
-docker/
-docs/
-docker-compose.yml
-requirements.txt
-```
-
-## Что дальше
-
-Для полного закрытия третьего этапа нужно добавить:
-
-- `CRUD` анкет
-- выдачу анкет на просмотр
-- лайки, пропуски, мэтчи
-- ранжирование
-- Redis-кэш анкет
+Если база уже была поднята на старой версии схемы, удобнее пересоздать контейнеры и volume базы перед первым запуском обновленного третьего этапа.
