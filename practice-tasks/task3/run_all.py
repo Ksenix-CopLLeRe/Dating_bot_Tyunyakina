@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 
 from cache_strategies import STRATEGIES
-from load_generator import WORKLOADS, append_csv, print_result, run_single
+from load_generator import WORKLOADS, append_csv, print_result, print_summary, run_single
 
 
 def parse_args() -> argparse.Namespace:
@@ -16,6 +16,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--redis-url", default="redis://localhost:6379/0")
     parser.add_argument("--write-back-flush-every", type=int, default=500)
     parser.add_argument("--output", type=Path, default=Path("results/results.csv"))
+    parser.add_argument("--format", choices=["summary", "json"], default="summary")
     return parser.parse_args()
 
 
@@ -26,7 +27,6 @@ def main() -> None:
 
     for workload in WORKLOADS:
         for strategy in STRATEGIES:
-            print(f"\n=== strategy={strategy} workload={workload} ===")
             db_path = Path("results") / f"{strategy}_{workload}.sqlite3"
             result = run_single(
                 strategy_name=strategy,
@@ -40,7 +40,11 @@ def main() -> None:
                 write_back_flush_every=args.write_back_flush_every,
             )
             append_csv(result, args.output)
-            print_result(result)
+            if args.format == "json":
+                print(f"\n=== strategy={strategy} workload={workload} ===")
+                print_result(result)
+            else:
+                print_summary(result)
 
     print(f"\nSaved CSV: {args.output}")
 
