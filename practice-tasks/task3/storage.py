@@ -12,8 +12,6 @@ class DbMetrics:
 
 
 class ProductStorage:
-    """Small SQLite wrapper that also counts database calls for the report."""
-
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
