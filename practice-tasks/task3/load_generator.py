@@ -183,6 +183,17 @@ def print_result(result: RunResult) -> None:
     print(json.dumps(asdict(result), ensure_ascii=False, indent=2))
 
 
+def print_summary(result: RunResult) -> None:
+    print(
+        f"{result.strategy:13} | {result.workload:11} | "
+        f"rps={result.throughput_rps:8.2f} | "
+        f"avg={result.avg_latency_ms:6.3f} ms | "
+        f"db={result.db_total:5} | "
+        f"hit={result.cache_hit_rate * 100:6.2f}% | "
+        f"wb_pending_max={result.write_back_pending_max}"
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Caching strategy load generator")
     parser.add_argument("--strategy", choices=sorted(STRATEGIES), required=True)
@@ -195,6 +206,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--redis-url", default="redis://localhost:6379/0")
     parser.add_argument("--write-back-flush-every", type=int, default=500)
     parser.add_argument("--output", type=Path, default=Path("results/results.csv"))
+    parser.add_argument("--format", choices=["summary", "json"], default="summary")
     return parser.parse_args()
 
 
@@ -212,7 +224,10 @@ def main() -> None:
         write_back_flush_every=args.write_back_flush_every,
     )
     append_csv(result, args.output)
-    print_result(result)
+    if args.format == "json":
+        print_result(result)
+    else:
+        print_summary(result)
 
 
 if __name__ == "__main__":

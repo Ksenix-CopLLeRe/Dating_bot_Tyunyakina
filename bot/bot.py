@@ -38,10 +38,12 @@ BTN_BROWSE = "Смотреть анкеты"
 BTN_LIKE = "Лайк"
 BTN_SKIP = "Пропустить"
 BTN_MATCHES = "Мои мэтчи"
+BTN_MY_LIKES = "Мои лайки"
 BTN_RATING = "Мой рейтинг"
 BTN_HELP = "Помощь"
 BTN_CANCEL = "Отмена"
 BTN_DIALOG = "Начать диалог"
+BTN_DONE = "Готово"
 
 GENDER_WOMAN = "Женщина"
 GENDER_MAN = "Мужчина"
@@ -49,6 +51,7 @@ PREF_ANY = "Без фильтра"
 
 
 class ProfileForm(StatesGroup):
+    name = State()
     age = State()
     gender = State()
     city = State()
@@ -65,7 +68,12 @@ class DialogForm(StatesGroup):
     target_telegram_id = State()
 
 
+class UpdateProfileForm(StatesGroup):
+    field_selection = State()
+
+
 PROFILE_STEPS = [
+    ("name", "Как тебя зовут? Укажи имя или ник для анкеты."),
     ("age", "Укажи возраст числом, например `24`."),
     ("gender", "Выбери пол кнопкой ниже."),
     ("city", "Укажи город."),
@@ -78,15 +86,32 @@ PROFILE_STEPS = [
     ("preferred_city", "Предпочитаемый город. Если без фильтра, нажми `Без фильтра`."),
 ]
 
+PROFILE_PROMPTS = dict(PROFILE_STEPS)
+UPDATE_FIELD_OPTIONS = [
+    ("name", "Имя"),
+    ("age", "Возраст"),
+    ("gender", "Пол"),
+    ("city", "Город"),
+    ("interests", "Интересы"),
+    ("bio", "О себе"),
+    ("photo", "Фото"),
+    ("preferred_gender", "Предпочитаемый пол"),
+    ("preferred_age_min", "Мин. возраст"),
+    ("preferred_age_max", "Макс. возраст"),
+    ("preferred_city", "Предпочитаемый город"),
+]
+UPDATE_FIELD_BY_LABEL = {label: field for field, label in UPDATE_FIELD_OPTIONS}
+UPDATE_LABEL_BY_FIELD = {field: label for field, label in UPDATE_FIELD_OPTIONS}
+
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=BTN_CREATE_PROFILE), KeyboardButton(text=BTN_UPDATE_PROFILE)],
             [KeyboardButton(text=BTN_MY_PROFILE), KeyboardButton(text=BTN_BROWSE)],
-            [KeyboardButton(text=BTN_MATCHES), KeyboardButton(text=BTN_RATING)],
-            [KeyboardButton(text=BTN_DIALOG), KeyboardButton(text=BTN_DELETE_PROFILE)],
-            [KeyboardButton(text=BTN_HELP)],
+            [KeyboardButton(text=BTN_MATCHES), KeyboardButton(text=BTN_MY_LIKES)],
+            [KeyboardButton(text=BTN_RATING), KeyboardButton(text=BTN_DIALOG)],
+            [KeyboardButton(text=BTN_DELETE_PROFILE), KeyboardButton(text=BTN_HELP)],
         ],
         resize_keyboard=True,
     )
@@ -96,8 +121,9 @@ def browse_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=BTN_LIKE), KeyboardButton(text=BTN_SKIP)],
-            [KeyboardButton(text=BTN_MATCHES), KeyboardButton(text=BTN_RATING)],
-            [KeyboardButton(text=BTN_MY_PROFILE), KeyboardButton(text=BTN_HELP)],
+            [KeyboardButton(text=BTN_MATCHES), KeyboardButton(text=BTN_MY_LIKES)],
+            [KeyboardButton(text=BTN_RATING), KeyboardButton(text=BTN_HELP)],
+            [KeyboardButton(text=BTN_MY_PROFILE)],
         ],
         resize_keyboard=True,
     )
@@ -132,6 +158,19 @@ def any_filter_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[[KeyboardButton(text=PREF_ANY)], [KeyboardButton(text=BTN_CANCEL)]],
         resize_keyboard=True,
     )
+
+
+def update_profile_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text=UPDATE_FIELD_OPTIONS[0][1]), KeyboardButton(text=UPDATE_FIELD_OPTIONS[1][1])],
+        [KeyboardButton(text=UPDATE_FIELD_OPTIONS[2][1]), KeyboardButton(text=UPDATE_FIELD_OPTIONS[3][1])],
+        [KeyboardButton(text=UPDATE_FIELD_OPTIONS[4][1]), KeyboardButton(text=UPDATE_FIELD_OPTIONS[5][1])],
+        [KeyboardButton(text=UPDATE_FIELD_OPTIONS[6][1]), KeyboardButton(text=UPDATE_FIELD_OPTIONS[7][1])],
+        [KeyboardButton(text=UPDATE_FIELD_OPTIONS[8][1]), KeyboardButton(text=UPDATE_FIELD_OPTIONS[9][1])],
+        [KeyboardButton(text=UPDATE_FIELD_OPTIONS[10][1])],
+        [KeyboardButton(text=BTN_DONE), KeyboardButton(text=BTN_CANCEL)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
 async def configure_bot_commands() -> None:
@@ -181,8 +220,16 @@ def nullable_value(raw_value: str) -> str | None:
     return normalize_choice(stripped)
 
 
+def nullable_text(raw_value: str) -> str | None:
+    stripped = raw_value.strip()
+    if stripped in {"-", PREF_ANY}:
+        return None
+    return stripped
+
+
 def build_profile_payload(data: dict) -> dict:
     return {
+        "name": data["name"].strip(),
         "age": int(data["age"]),
         "gender": normalize_choice(data["gender"]),
         "city": data["city"].strip(),
@@ -202,9 +249,46 @@ def build_profile_payload(data: dict) -> dict:
     }
 
 
+def build_single_field_payload(field_name: str, data: dict, current_profile: dict | None = None) -> dict:
+    if field_name == "name":
+        return {"name": data["name"].strip()}
+    if field_name == "age":
+        return {"age": int(data["age"])}
+    if field_name == "gender":
+        return {"gender": normalize_choice(data["gender"])}
+    if field_name == "city":
+        return {"city": data["city"].strip()}
+    if field_name == "interests":
+        return {"interests": data["interests"].strip()}
+    if field_name == "bio":
+        return {"bio": data["bio"].strip()}
+    if field_name == "photo":
+        return {"photo_url": data["photo_file_id"]}
+    if field_name == "preferred_gender":
+        return {"preferred_gender": nullable_value(data["preferred_gender"])}
+    if field_name == "preferred_city":
+        return {"preferred_city": nullable_text(data["preferred_city"])}
+    if field_name == "preferred_age_min":
+        payload = {
+            "preferred_age_min": None if data["preferred_age_min"].strip() in {"-", PREF_ANY} else int(data["preferred_age_min"]),
+        }
+        if current_profile and current_profile.get("preferred_age_max") is not None:
+            payload["preferred_age_max"] = current_profile["preferred_age_max"]
+        return payload
+    if field_name == "preferred_age_max":
+        payload = {
+            "preferred_age_max": None if data["preferred_age_max"].strip() in {"-", PREF_ANY} else int(data["preferred_age_max"]),
+        }
+        if current_profile and current_profile.get("preferred_age_min") is not None:
+            payload["preferred_age_min"] = current_profile["preferred_age_min"]
+        return payload
+    raise ValueError(f"Unsupported profile field: {field_name}")
+
+
 def format_profile(profile: dict) -> str:
     return (
         "Твоя анкета:\n"
+        f"Имя: {profile.get('name', 'не указано')}\n"
         f"Возраст: {profile.get('age', 'не указан')}\n"
         f"Пол: {profile.get('gender', 'не указан')}\n"
         f"Город: {profile.get('city', 'не указан')}\n"
@@ -227,6 +311,7 @@ def format_candidate(candidate: dict) -> str:
     )
     return (
         "Кандидат для знакомства:\n"
+        f"Имя: {profile.get('name') or 'не указано'}\n"
         f"Username: {candidate.get('username') or 'без username'}\n"
         f"Возраст: {profile.get('age')}\n"
         f"Пол: {profile.get('gender')}\n"
@@ -236,6 +321,98 @@ def format_candidate(candidate: dict) -> str:
         f"{rating_text}\n"
         f"Кэшировано кандидатов: {candidate.get('remaining_cached_candidates')}"
     )
+
+
+def format_like_entry(like: dict) -> str:
+    profile = like.get("profile") or {}
+    status = "мэтч" if like.get("is_match") else "ожидание ответа"
+    username = f"@{like['other_username']}" if like.get("other_username") else "без username"
+    return (
+        f"- {profile.get('name') or 'Без имени'} ({username}, "
+        f"{profile.get('age') or 'возраст не указан'}, {profile.get('city') or 'город не указан'})"
+        f" [{status}]"
+    )
+
+
+def rating_explanation_text(payload: dict) -> str:
+    return (
+        "Коротко: рейтинг складывается из двух частей.\n"
+        f"Level 1 = заполненность анкеты ({payload['level1_score']:.1f}).\n"
+        f"Level 2 = активность и реакции на тебя: лайки, мэтчи, диалоги ({payload['level2_score']:.1f}).\n"
+        f"Итоговый score = среднее этих двух значений ({payload['final_score']:.1f})."
+    )
+
+
+async def prompt_for_profile_field(message: Message, state: FSMContext, field_name: str) -> None:
+    reply_markup = cancel_keyboard()
+    if field_name == "gender":
+        reply_markup = gender_keyboard()
+    elif field_name == "preferred_gender":
+        reply_markup = preference_gender_keyboard()
+    elif field_name in {"preferred_age_min", "preferred_age_max", "preferred_city"}:
+        reply_markup = any_filter_keyboard()
+
+    await state.set_state(getattr(ProfileForm, field_name))
+    await message.answer(PROFILE_PROMPTS[field_name], reply_markup=reply_markup)
+
+
+async def submit_single_field_update(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    field_name = data["selected_field"]
+    telegram_id = telegram_id_from_message(message)
+    status, current_profile = await api_request("GET", f"/profiles/{telegram_id}")
+    if status >= 400:
+        await state.clear()
+        await message.answer(
+            f"Не удалось получить текущую анкету: {current_profile.get('detail', current_profile)}",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    payload = build_single_field_payload(field_name, data, current_profile)
+    status, response = await api_request("PUT", f"/profiles/{telegram_id}", json_data=payload)
+    if status >= 400:
+        await message.answer(
+            f"Не удалось обновить поле: {response.get('detail', response)}",
+            reply_markup=update_profile_keyboard(),
+        )
+        await state.set_state(UpdateProfileForm.field_selection)
+        return
+
+    await state.set_data({"mode": "update_single"})
+    await state.set_state(UpdateProfileForm.field_selection)
+    await send_profile_photo(
+        message,
+        response.get("photo_url"),
+        f"Поле `{UPDATE_LABEL_BY_FIELD[field_name]}` обновлено.\n\n{format_profile(response)}",
+    )
+    await message.answer("Выбери, что еще хочешь обновить.", reply_markup=update_profile_keyboard())
+
+
+async def send_like_notification(notification: dict | None) -> None:
+    if not notification:
+        return
+
+    recipient_telegram_id = notification.get("recipient_telegram_id")
+    liker_profile = notification.get("liker_profile") or {}
+    if not recipient_telegram_id:
+        return
+
+    username = f"@{notification['liker_username']}" if notification.get("liker_username") else "без username"
+    caption = (
+        "Твою анкету лайкнули.\n"
+        f"Кто: {liker_profile.get('name') or 'Без имени'} ({username}"
+    )
+    caption += (
+        f")\nВозраст: {liker_profile.get('age') or 'не указан'}\n"
+        f"Город: {liker_profile.get('city') or 'не указан'}\n"
+        f"Интересы: {liker_profile.get('interests') or 'не указаны'}"
+    )
+
+    if liker_profile.get("photo_url"):
+        await bot.send_photo(chat_id=int(recipient_telegram_id), photo=liker_profile["photo_url"], caption=caption)
+    else:
+        await bot.send_message(chat_id=int(recipient_telegram_id), text=caption)
 
 
 async def send_profile_photo(message: Message, photo_file_id: str | None, caption: str) -> None:
@@ -266,6 +443,9 @@ async def continue_profile_form(message: Message, state: FSMContext, next_index:
     if next_index >= len(PROFILE_STEPS):
         data = await state.get_data()
         mode = data["mode"]
+        if mode == "update_single":
+            await submit_single_field_update(message, state)
+            return
         telegram_id = telegram_id_from_message(message)
         payload = build_profile_payload(data)
 
@@ -287,19 +467,9 @@ async def continue_profile_form(message: Message, state: FSMContext, next_index:
         )
         return
 
-    field_name, prompt = PROFILE_STEPS[next_index]
+    field_name, _prompt = PROFILE_STEPS[next_index]
     await state.update_data(step_index=next_index)
-    await state.set_state(getattr(ProfileForm, field_name))
-
-    reply_markup = cancel_keyboard()
-    if field_name == "gender":
-        reply_markup = gender_keyboard()
-    elif field_name == "preferred_gender":
-        reply_markup = preference_gender_keyboard()
-    elif field_name in {"preferred_age_min", "preferred_age_max", "preferred_city"}:
-        reply_markup = any_filter_keyboard()
-
-    await message.answer(prompt, reply_markup=reply_markup)
+    await prompt_for_profile_field(message, state, field_name)
 
 
 async def start_profile_form(message: Message, state: FSMContext, mode: str) -> None:
@@ -387,10 +557,11 @@ async def help_command(message: Message):
     await message.answer(
         "Доступные действия:\n"
         "• Создать анкету\n"
-        "• Обновить анкету\n"
+        "• Обновить анкету по выбранным полям\n"
         "• Посмотреть свою анкету\n"
         "• Смотреть анкеты\n"
         "• Ставить лайки и пропуски\n"
+        "• Смотреть свои последние лайки\n"
         "• Смотреть мэтчи и рейтинг\n"
         "• Отметить начало диалога кнопкой `Начать диалог`\n\n"
         "Основные действия доступны кнопками под полем ввода.",
@@ -414,7 +585,37 @@ async def create_profile_command(message: Message, state: FSMContext):
 @dp.message(F.text == BTN_UPDATE_PROFILE)
 @dp.message(Command("update_profile"))
 async def update_profile_command(message: Message, state: FSMContext):
-    await start_profile_form(message, state, "update")
+    await state.clear()
+    await state.update_data(mode="update_single")
+    await state.set_state(UpdateProfileForm.field_selection)
+    await message.answer(
+        "Выбери кнопкой, что именно хочешь обновить в анкете.",
+        reply_markup=update_profile_keyboard(),
+    )
+
+
+@dp.message(UpdateProfileForm.field_selection)
+async def update_profile_field_selection(message: Message, state: FSMContext):
+    choice = (message.text or "").strip()
+    if choice == BTN_DONE:
+        await state.clear()
+        await message.answer("Обновление анкеты завершено.", reply_markup=main_menu_keyboard())
+        return
+
+    field_name = UPDATE_FIELD_BY_LABEL.get(choice)
+    if not field_name:
+        await message.answer(
+            "Выбери поле кнопкой ниже или нажми `Готово`.",
+            reply_markup=update_profile_keyboard(),
+        )
+        return
+
+    await state.update_data(
+        mode="update_single",
+        selected_field=field_name,
+        step_index=len(PROFILE_STEPS) - 1,
+    )
+    await prompt_for_profile_field(message, state, field_name)
 
 
 @dp.message(F.text == BTN_MY_PROFILE)
@@ -468,6 +669,10 @@ async def like_command(message: Message):
         return
 
     await message.answer(payload["message"], reply_markup=browse_keyboard())
+    try:
+        await send_like_notification(payload.get("like_notification"))
+    except Exception:
+        logger.exception("Failed to send like notification")
     await show_next_candidate(message, payload.get("next_candidate"))
 
 
@@ -515,6 +720,27 @@ async def matches_command(message: Message):
     await message.answer("\n".join(lines), reply_markup=main_menu_keyboard())
 
 
+@dp.message(F.text == BTN_MY_LIKES)
+@dp.message(Command("my_likes"))
+async def my_likes_command(message: Message):
+    status, payload = await api_request("GET", f"/likes/{telegram_id_from_message(message)}")
+    if status >= 400:
+        await message.answer(
+            f"Не удалось получить лайки: {payload.get('detail', payload)}",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    likes = payload.get("likes", [])
+    if not likes:
+        await message.answer("У тебя пока нет сохраненных лайков.", reply_markup=main_menu_keyboard())
+        return
+
+    lines = ["Твои последние лайки:"]
+    lines.extend(format_like_entry(like) for like in likes)
+    await message.answer("\n".join(lines), reply_markup=main_menu_keyboard())
+
+
 @dp.message(F.text == BTN_RATING)
 @dp.message(Command("rating"))
 async def rating_command(message: Message):
@@ -530,7 +756,8 @@ async def rating_command(message: Message):
         "Твой рейтинг:\n"
         f"Level 1: {payload['level1_score']:.1f}\n"
         f"Level 2: {payload['level2_score']:.1f}\n"
-        f"Итоговый score: {payload['final_score']:.1f}",
+        f"Итоговый score: {payload['final_score']:.1f}\n\n"
+        f"{rating_explanation_text(payload)}",
         reply_markup=main_menu_keyboard(),
     )
 
@@ -590,6 +817,11 @@ async def open_dialog_from_button(message: Message, state: FSMContext):
 
     await state.clear()
     await message.answer(payload["message"], reply_markup=main_menu_keyboard())
+
+
+@dp.message(ProfileForm.name)
+async def profile_name(message: Message, state: FSMContext):
+    await handle_profile_step(message, state, "name")
 
 
 @dp.message(ProfileForm.age)

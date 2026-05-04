@@ -30,6 +30,7 @@ class HealthResponse(BaseModel):
 
 
 class ProfileBase(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
     age: int = Field(ge=18, le=100)
     gender: str = Field(min_length=1, max_length=32)
     city: str = Field(min_length=1, max_length=128)
@@ -49,6 +50,7 @@ class ProfileBase(BaseModel):
         "photo_url",
         "preferred_gender",
         "preferred_city",
+        "name",
     )
     @classmethod
     def strip_strings(cls, value: str | None) -> str | None:
@@ -75,6 +77,7 @@ class ProfileCreate(ProfileBase):
 
 
 class ProfileUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
     age: int | None = Field(default=None, ge=18, le=100)
     gender: str | None = Field(default=None, min_length=1, max_length=32)
     city: str | None = Field(default=None, min_length=1, max_length=128)
@@ -94,6 +97,7 @@ class ProfileUpdate(BaseModel):
         "photo_url",
         "preferred_gender",
         "preferred_city",
+        "name",
     )
     @classmethod
     def strip_optional_strings(cls, value: str | None) -> str | None:
@@ -130,6 +134,7 @@ class ProfileResponse(BaseModel):
 
     id: int
     user_id: int
+    name: str | None
     age: int | None
     gender: str | None
     city: str | None
@@ -152,6 +157,12 @@ class CandidateProfileResponse(BaseModel):
     remaining_cached_candidates: int
 
 
+class LikeNotificationResponse(BaseModel):
+    recipient_telegram_id: str
+    liker_username: str | None = None
+    liker_profile: ProfileResponse | None = None
+
+
 class MatchResponse(BaseModel):
     match_id: int
     other_user_id: int
@@ -170,6 +181,19 @@ class InteractionResponse(BaseModel):
     is_match: bool
     message: str
     next_candidate: CandidateProfileResponse | None = None
+    like_notification: LikeNotificationResponse | None = None
+
+
+class OutgoingLikeResponse(BaseModel):
+    other_user_id: int
+    other_username: str | None = None
+    profile: ProfileResponse | None = None
+    created_at: datetime
+    is_match: bool
+
+
+class OutgoingLikeListResponse(BaseModel):
+    likes: list[OutgoingLikeResponse]
 
 
 class QueueStateResponse(BaseModel):

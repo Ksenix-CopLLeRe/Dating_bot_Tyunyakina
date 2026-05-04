@@ -46,6 +46,7 @@ def get_profile_by_user_id(db: Session, user_id: int) -> Profile | None:
 
 def profile_has_content(profile: Profile) -> bool:
     content_fields = (
+        profile.name,
         profile.age,
         profile.gender,
         profile.city,
@@ -173,6 +174,16 @@ def get_matches_for_user(db: Session, user_id: int) -> list[Match]:
         db.query(Match)
         .filter(or_(Match.user1_id == user_id, Match.user2_id == user_id))
         .order_by(Match.created_at.desc())
+        .all()
+    )
+
+
+def get_recent_outgoing_likes(db: Session, user_id: int, limit: int = 10) -> list[Like]:
+    return (
+        db.query(Like)
+        .filter(Like.from_user_id == user_id)
+        .order_by(Like.created_at.desc())
+        .limit(limit)
         .all()
     )
 

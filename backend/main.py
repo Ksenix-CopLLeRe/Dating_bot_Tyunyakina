@@ -1,5 +1,5 @@
-from fastapi import Depends, FastAPI, HTTPException
-from sqlalchemy import text
+from fastapi import Depends, FastAPI, HTTPException, Query
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from . import cache, crud, schemas
@@ -8,6 +8,17 @@ from .ranking import recompute_many, recompute_rating
 
 
 Base.metadata.create_all(bind=engine)
+
+
+def ensure_profile_schema() -> None:
+    inspector = inspect(engine)
+    profile_columns = {column["name"] for column in inspector.get_columns("profiles")}
+    if "name" not in profile_columns:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE profiles ADD COLUMN name VARCHAR(128)"))
+
+
+ensure_profile_schema()
 
 app = FastAPI(
     title="Dating Bot Backend",
@@ -53,6 +64,24 @@ def build_candidate_response(db: Session, viewer_user_id: int, candidate_user_id
         profile=candidate_profile,
         rating=candidate_rating,
         remaining_cached_candidates=queue_state["remaining_cached_candidates"],
+    )
+
+
+def build_like_notification(
+    db: Session,
+    liker_user_id: int,
+    recipient_user_id: int,
+) -> schemas.LikeNotificationResponse | None:
+    recipient_user = crud.get_user_by_id(db, recipient_user_id)
+    liker_user = crud.get_user_by_id(db, liker_user_id)
+    liker_profile = crud.get_profile_by_user_id(db, liker_user_id)
+    if not recipient_user or not liker_profile:
+        return None
+
+    return schemas.LikeNotificationResponse(
+        recipient_telegram_id=recipient_user.telegram_id,
+        liker_username=liker_user.username if liker_user else None,
+        liker_profile=liker_profile,
     )
 
 
@@ -205,6 +234,36 @@ def get_rating(telegram_id: str, db: Session = Depends(get_db)):
     return recompute_rating(db, user.id)
 
 
+@app.get(
+    "/likes/{telegram_id}",
+    response_model=schemas.OutgoingLikeListResponse,
+    tags=["likes"],
+)
+def get_my_likes(
+    telegram_id: str,
+    limit: int = Query(default=10, ge=1, le=20),
+    db: Session = Depends(get_db),
+):
+    user = get_user_or_404(db, telegram_id)
+    likes = crud.get_recent_outgoing_likes(db, user.id, limit)
+
+    result = []
+    for like in likes:
+        other_user = crud.get_user_by_id(db, like.to_user_id)
+        other_profile = crud.get_profile_by_user_id(db, like.to_user_id)
+        result.append(
+            schemas.OutgoingLikeResponse(
+                other_user_id=like.to_user_id,
+                other_username=other_user.username if other_user else None,
+                profile=other_profile,
+                created_at=like.created_at,
+                is_match=crud.get_match_between_users(db, user.id, like.to_user_id) is not None,
+            )
+        )
+
+    return schemas.OutgoingLikeListResponse(likes=result)
+
+
 @app.post(
     "/interactions/{telegram_id}/like",
     response_model=schemas.InteractionResponse,
@@ -220,7 +279,7 @@ def like_current_candidate(telegram_id: str, db: Session = Depends(get_db)):
     if candidate_user_id is None:
         raise HTTPException(status_code=404, detail="Нет доступной анкеты для лайка.")
 
-    crud.record_like(db, user.id, candidate_user_id)
+    _like, created = crud.record_like(db, user.id, candidate_user_id)
     is_match = False
     if crud.is_mutual_like(db, user.id, candidate_user_id):
         crud.create_match(db, user.id, candidate_user_id)
@@ -232,6 +291,7 @@ def like_current_candidate(telegram_id: str, db: Session = Depends(get_db)):
         cache.refill_candidate_queue(db, user.id)
 
     next_candidate = get_next_candidate_response(db, user.id)
+    like_notification = build_like_notification(db, user.id, candidate_user_id) if created else None
     message = "Взаимный лайк! У вас мэтч." if is_match else "Лайк сохранен."
     return schemas.InteractionResponse(
         action="like",
@@ -239,6 +299,7 @@ def like_current_candidate(telegram_id: str, db: Session = Depends(get_db)):
         is_match=is_match,
         message=message,
         next_candidate=next_candidate,
+        like_notification=like_notification,
     )
 
 
