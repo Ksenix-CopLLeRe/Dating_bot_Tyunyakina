@@ -55,7 +55,6 @@ class CacheStrategy(ABC):
         raise NotImplementedError
 
     def finish(self) -> None:
-        """Called after the load test. Write-back overrides this to flush data."""
 
     def pending_writes(self) -> int:
         return 0
