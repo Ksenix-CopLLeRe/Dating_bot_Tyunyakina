@@ -9,7 +9,7 @@ import psycopg2
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://postgres:postgres@localhost:5432/isolation_practice",
+    "postgresql://postgres:postgres@localhost:5433/isolation_practice",
 )
 
 

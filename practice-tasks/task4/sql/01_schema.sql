@@ -18,11 +18,11 @@ CREATE TABLE products (
 
 INSERT INTO accounts (id, owner_name, balance)
 VALUES
-    (1, 'Alice', 1000),
-    (2, 'Bob', 1000);
+    (1, 'Anna', 1000),
+    (2, 'Sergey', 1000);
 
 INSERT INTO products (category, title, price)
 VALUES
-    ('book', 'SQL basics', 700),
-    ('book', 'PostgreSQL transactions', 1200),
-    ('phone', 'Simple phone', 5000);
+    ('book', 'Harry Potter', 700),
+    ('book', 'All for the game', 1200),
+    ('phone', 'Samsung Ultra Flip Flop Z', 5000);
