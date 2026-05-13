@@ -468,6 +468,7 @@ def get_matches(telegram_id: str, db: Session = Depends(get_db)):
             schemas.MatchResponse(
                 match_id=match.id,
                 other_user_id=other_user_id,
+                other_telegram_id=other_user.telegram_id if other_user else None,
                 other_username=other_user.username if other_user else None,
                 profile=other_profile,
                 created_at=match.created_at,

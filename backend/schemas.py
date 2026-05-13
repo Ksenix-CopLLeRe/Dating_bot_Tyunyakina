@@ -171,6 +171,7 @@ class LikeNotificationResponse(BaseModel):
 class MatchResponse(BaseModel):
     match_id: int
     other_user_id: int
+    other_telegram_id: str | None = None
     other_username: str | None = None
     profile: ProfileResponse | None = None
     created_at: datetime

@@ -749,11 +749,14 @@ async def matches_command(message: Message):
     lines = ["Твои мэтчи:"]
     for match in matches:
         profile = match.get("profile") or {}
+        telegram_id = match.get("other_telegram_id") or "не найден"
+        username = f"@{match['other_username']}" if match.get("other_username") else "без username"
         lines.append(
-            f"- {match.get('other_username') or 'без username'} "
-            f"(telegram user id: {match['other_user_id']}, "
+            f"- {profile.get('name') or 'Без имени'} ({username}, "
             f"город: {profile.get('city') or 'не указан'}, "
-            f"интересы: {profile.get('interests') or 'не указаны'})"
+            f"интересы: {profile.get('interests') or 'не указаны'})\n"
+            f"  Telegram ID для диалога: {telegram_id}\n"
+            f"  Команда: /open_dialog {telegram_id}"
         )
 
     await message.answer("\n".join(lines), reply_markup=main_menu_keyboard())
@@ -821,7 +824,8 @@ async def start_dialog_button(message: Message, state: FSMContext):
     await state.clear()
     await state.set_state(DialogForm.target_telegram_id)
     await message.answer(
-        "Отправь `telegram_id` пользователя, с которым хочешь отметить начало диалога.",
+        "Отправь Telegram ID пользователя из списка `Мои мэтчи`.\n"
+        "Можно также нажать команду вида `/open_dialog 123456789`, которая показана рядом с мэтчем.",
         reply_markup=cancel_keyboard(),
     )
 
