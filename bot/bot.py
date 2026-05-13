@@ -4,7 +4,7 @@ import os
 
 import aiohttp
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import Command, CommandObject, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BotCommand, KeyboardButton, Message, ReplyKeyboardMarkup
@@ -45,7 +45,7 @@ BTN_HELP = "Помощь"
 BTN_CANCEL = "Отмена"
 BTN_DIALOG = "Начать диалог"
 BTN_DONE = "Готово"
-BTN_SKIP_FIELD = "Пропустить"
+BTN_SKIP_FIELD = "Пропустить поле"
 
 GENDER_WOMAN = "Женщина"
 GENDER_MAN = "Мужчина"
@@ -499,7 +499,7 @@ async def start_profile_form(message: Message, state: FSMContext, mode: str) -> 
     await state.update_data(mode=mode, step_index=0)
     await message.answer(
         "Сейчас соберем анкету шаг за шагом.\n"
-        "Любой пункт можно оставить пустым кнопкой `Пропустить`.\n"
+        "Любой пункт можно оставить пустым кнопкой `Пропустить поле`.\n"
         "Если хочешь остановиться, нажми `Отмена`.",
         reply_markup=cancel_keyboard(),
     )
@@ -532,7 +532,7 @@ async def handle_profile_step(message: Message, state: FSMContext, current_field
 
     if current_field in {"age", "preferred_age_min", "preferred_age_max"} and text not in {PREF_ANY, "-"}:
         if not text.isdigit():
-            await message.answer("Здесь нужно число, `Без фильтра` или `Пропустить`.")
+            await message.answer("Здесь нужно число, `Без фильтра` или `Пропустить поле`.")
             return
 
     await state.update_data(**{current_field: text})
@@ -715,7 +715,7 @@ async def like_command(message: Message):
     await show_next_candidate(message, payload.get("next_candidate"))
 
 
-@dp.message(F.text == BTN_SKIP)
+@dp.message(StateFilter(None), F.text == BTN_SKIP)
 @dp.message(Command("skip"))
 async def skip_command(message: Message):
     status, payload = await api_request("POST", f"/interactions/{telegram_id_from_message(message)}/skip")
