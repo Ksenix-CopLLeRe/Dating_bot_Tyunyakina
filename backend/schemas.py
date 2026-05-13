@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 class UserCreate(BaseModel):
     telegram_id: str
     username: str | None = None
+    referrer_telegram_id: str | None = None
 
 
 class UserResponse(BaseModel):
@@ -14,6 +15,7 @@ class UserResponse(BaseModel):
     id: int
     telegram_id: str
     username: str | None = None
+    referred_by_user_id: int | None = None
     created_at: datetime
 
 
@@ -27,6 +29,8 @@ class HealthResponse(BaseModel):
     status: str
     database: str
     redis: str
+    broker: str
+    celery: str
 
 
 class ProfileBase(BaseModel):
@@ -125,6 +129,7 @@ class RatingResponse(BaseModel):
     user_id: int
     level1_score: float
     level2_score: float
+    referral_score: float
     final_score: float
     updated_at: datetime
 

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
+from .crud import count_referrals
 from .models import DialogInitiation, Like, Match, Profile, Rating, Skip
 
 
@@ -90,6 +91,10 @@ def compute_level2_score(db: Session, user_id: int) -> float:
     return clamp(score)
 
 
+def compute_referral_score(db: Session, user_id: int) -> float:
+    return clamp(count_referrals(db, user_id) * 20, maximum=100)
+
+
 def recompute_rating(db: Session, user_id: int) -> Rating:
     profile = db.query(Profile).filter(Profile.user_id == user_id).first()
     rating = db.query(Rating).filter(Rating.user_id == user_id).first()
@@ -101,10 +106,12 @@ def recompute_rating(db: Session, user_id: int) -> Rating:
 
     level1_score = compute_level1_score(profile)
     level2_score = compute_level2_score(db, user_id)
-    final_score = clamp(level1_score * 0.5 + level2_score * 0.5)
+    referral_score = compute_referral_score(db, user_id)
+    final_score = clamp(level1_score * 0.45 + level2_score * 0.45 + referral_score * 0.10)
 
     rating.level1_score = level1_score
     rating.level2_score = level2_score
+    rating.referral_score = referral_score
     rating.final_score = final_score
 
     db.commit()

@@ -1,7 +1,7 @@
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from .models import DialogInitiation, Like, Match, Profile, Rating, Skip, User
+from .models import DialogInitiation, Like, Match, Profile, Rating, Referral, Skip, User
 
 
 def get_user_by_telegram(db: Session, telegram_id: str) -> User | None:
@@ -12,12 +12,27 @@ def get_user_by_id(db: Session, user_id: int) -> User | None:
     return db.query(User).filter(User.id == user_id).first()
 
 
-def create_user(db: Session, telegram_id: str, username: str | None) -> User:
-    user = User(telegram_id=telegram_id, username=username)
+def create_user(
+    db: Session,
+    telegram_id: str,
+    username: str | None,
+    referrer_telegram_id: str | None = None,
+) -> User:
+    referrer = None
+    if referrer_telegram_id and referrer_telegram_id != telegram_id:
+        referrer = get_user_by_telegram(db, referrer_telegram_id)
+
+    user = User(
+        telegram_id=telegram_id,
+        username=username,
+        referred_by_user_id=referrer.id if referrer else None,
+    )
     db.add(user)
     db.flush()
 
     db.add(Rating(user_id=user.id))
+    if referrer:
+        db.add(Referral(inviter_user_id=referrer.id, invited_user_id=user.id))
 
     db.commit()
     db.refresh(user)
@@ -28,6 +43,7 @@ def get_or_create_user(
     db: Session,
     telegram_id: str,
     username: str | None,
+    referrer_telegram_id: str | None = None,
 ) -> tuple[User, bool]:
     user = get_user_by_telegram(db, telegram_id)
     if user:
@@ -37,7 +53,7 @@ def get_or_create_user(
             db.refresh(user)
         return user, False
 
-    return create_user(db, telegram_id, username), True
+    return create_user(db, telegram_id, username, referrer_telegram_id), True
 
 
 def get_profile_by_user_id(db: Session, user_id: int) -> Profile | None:
@@ -198,3 +214,7 @@ def record_dialog_initiation(db: Session, match_id: int, from_user_id: int, to_u
     db.commit()
     db.refresh(dialog)
     return dialog
+
+
+def count_referrals(db: Session, inviter_user_id: int) -> int:
+    return db.query(Referral).filter(Referral.inviter_user_id == inviter_user_id).count()

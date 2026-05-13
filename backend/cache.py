@@ -5,11 +5,8 @@ import json
 import redis
 from sqlalchemy.orm import Session
 
-from .config import REDIS_URL
+from .config import CANDIDATE_QUEUE_SIZE, REDIS_URL
 from .models import Like, Match, Profile, Rating, Skip
-
-
-QUEUE_SIZE = 10
 
 
 redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
@@ -25,6 +22,13 @@ def current_key(user_id: int) -> str:
 
 def invalidate_candidate_cache(user_id: int) -> None:
     redis_client.delete(queue_key(user_id), current_key(user_id))
+
+
+def invalidate_all_candidate_caches() -> int:
+    keys = list(redis_client.scan_iter("candidate_queue:*")) + list(redis_client.scan_iter("candidate_current:*"))
+    if not keys:
+        return 0
+    return int(redis_client.delete(*keys))
 
 
 def get_current_candidate_id(user_id: int) -> int | None:
@@ -101,7 +105,7 @@ def refill_candidate_queue(db: Session, user_id: int) -> list[int]:
         reverse=True,
     )
 
-    candidate_ids = [profile.user_id for profile, _rating in ranked[:QUEUE_SIZE]]
+    candidate_ids = [profile.user_id for profile, _rating in ranked[:CANDIDATE_QUEUE_SIZE]]
     invalidate_candidate_cache(user_id)
 
     if candidate_ids:

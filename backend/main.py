@@ -1,30 +1,95 @@
-from fastapi import Depends, FastAPI, HTTPException, Query
+import logging
+import time
+
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
-from . import cache, crud, schemas
+from . import cache, crud, events, schemas
+from .background import schedule_queue_refresh, schedule_rating_refresh
+from .config import CANDIDATE_QUEUE_REFILL_THRESHOLD
 from .database import Base, SessionLocal, engine
+from .logging_config import configure_logging
 from .ranking import recompute_many, recompute_rating
 
+
+configure_logging()
+logger = logging.getLogger(__name__)
 
 Base.metadata.create_all(bind=engine)
 
 
-def ensure_profile_schema() -> None:
+def ensure_database_schema() -> None:
     inspector = inspect(engine)
     profile_columns = {column["name"] for column in inspector.get_columns("profiles")}
     if "name" not in profile_columns:
         with engine.begin() as connection:
             connection.execute(text("ALTER TABLE profiles ADD COLUMN name VARCHAR(128)"))
 
+    user_columns = {column["name"] for column in inspector.get_columns("users")}
+    rating_columns = {column["name"] for column in inspector.get_columns("ratings")}
 
-ensure_profile_schema()
+    with engine.begin() as connection:
+        if "referred_by_user_id" not in user_columns:
+            connection.execute(text("ALTER TABLE users ADD COLUMN referred_by_user_id INTEGER"))
+        if "referral_score" not in rating_columns:
+            connection.execute(text("ALTER TABLE ratings ADD COLUMN referral_score FLOAT DEFAULT 0 NOT NULL"))
+
+        for statement in (
+            "CREATE INDEX IF NOT EXISTS ix_profiles_matching ON profiles (gender, city, age)",
+            "CREATE INDEX IF NOT EXISTS ix_profiles_preferences ON profiles (preferred_gender, preferred_city)",
+            "CREATE INDEX IF NOT EXISTS ix_profiles_updated_at ON profiles (updated_at)",
+            "CREATE INDEX IF NOT EXISTS ix_likes_to_created ON likes (to_user_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS ix_likes_from_created ON likes (from_user_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS ix_skips_to_created ON skips (to_user_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS ix_skips_from_created ON skips (from_user_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS ix_matches_user1_created ON matches (user1_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS ix_matches_user2_created ON matches (user2_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS ix_dialogs_from_created ON dialog_initiations (from_user_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS ix_dialogs_match_created ON dialog_initiations (match_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS ix_ratings_final_score ON ratings (final_score)",
+            "CREATE INDEX IF NOT EXISTS ix_ratings_updated_at ON ratings (updated_at)",
+            "CREATE INDEX IF NOT EXISTS ix_referrals_inviter_created ON referrals (inviter_user_id, created_at)",
+        ):
+            connection.execute(text(statement))
+
+
+ensure_database_schema()
 
 app = FastAPI(
     title="Dating Bot Backend",
     description="Backend API for the dating bot project.",
-    version="0.3.0",
+    version="0.4.0",
 )
+
+HTTP_REQUESTS_TOTAL = Counter(
+    "dating_bot_http_requests_total",
+    "Total HTTP requests grouped by method, route and status.",
+    ["method", "route", "status"],
+)
+HTTP_REQUEST_DURATION_SECONDS = Histogram(
+    "dating_bot_http_request_duration_seconds",
+    "HTTP request duration grouped by method and route.",
+    ["method", "route"],
+)
+INTERACTIONS_TOTAL = Counter(
+    "dating_bot_interactions_total",
+    "Dating interactions grouped by action and match status.",
+    ["action", "is_match"],
+)
+
+
+@app.middleware("http")
+async def metrics_middleware(request: Request, call_next):
+    started_at = time.perf_counter()
+    response = await call_next(request)
+    route = request.scope.get("route")
+    route_path = getattr(route, "path", request.url.path)
+    elapsed = time.perf_counter() - started_at
+    HTTP_REQUESTS_TOTAL.labels(request.method, route_path, str(response.status_code)).inc()
+    HTTP_REQUEST_DURATION_SECONDS.labels(request.method, route_path).observe(elapsed)
+    return response
 
 
 def get_db():
@@ -97,7 +162,7 @@ def root():
     return {
         "service": "dating-bot-backend",
         "status": "ok",
-        "stage": "3",
+        "stage": "4",
     }
 
 
@@ -105,13 +170,43 @@ def root():
 def healthcheck(db: Session = Depends(get_db)):
     db.execute(text("SELECT 1"))
     cache.redis_client.ping()
-    return schemas.HealthResponse(status="ok", database="connected", redis="connected")
+    broker_status = "connected" if events.check_mq_connection() else "unavailable"
+    celery_status = cache.redis_client.get("celery:worker:heartbeat") or "no heartbeat yet"
+    status = "ok" if broker_status == "connected" else "degraded"
+    return schemas.HealthResponse(
+        status=status,
+        database="connected",
+        redis="connected",
+        broker=broker_status,
+        celery=celery_status,
+    )
+
+
+@app.get("/metrics", tags=["system"])
+def metrics():
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.post("/users/register", response_model=schemas.RegistrationResponse, tags=["users"])
 def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
-    db_user, created = crud.get_or_create_user(db, user.telegram_id, user.username)
-    recompute_rating(db, db_user.id)
+    db_user, created = crud.get_or_create_user(
+        db,
+        user.telegram_id,
+        user.username,
+        user.referrer_telegram_id,
+    )
+    affected_user_ids = [db_user.id]
+    if db_user.referred_by_user_id:
+        affected_user_ids.append(db_user.referred_by_user_id)
+    recompute_many(db, affected_user_ids)
+    schedule_rating_refresh(affected_user_ids)
+    if created:
+        events.publish_interaction_event(
+            "user_registered",
+            db_user.id,
+            db_user.referred_by_user_id,
+            {"telegram_id": db_user.telegram_id},
+        )
     message = "Пользователь зарегистрирован." if created else "Пользователь уже зарегистрирован."
     return schemas.RegistrationResponse(user=db_user, created=created, message=message)
 
@@ -146,7 +241,9 @@ def create_profile(
         created_profile = crud.create_profile(db, user.id, profile.model_dump())
 
     recompute_rating(db, user.id)
-    cache.invalidate_candidate_cache(user.id)
+    schedule_rating_refresh([user.id])
+    cache.invalidate_all_candidate_caches()
+    schedule_queue_refresh(user.id)
     return created_profile
 
 
@@ -179,7 +276,9 @@ def update_own_profile(
 
     updated_profile = crud.update_profile(db, profile, payload)
     recompute_rating(db, user.id)
-    cache.invalidate_candidate_cache(user.id)
+    schedule_rating_refresh([user.id])
+    cache.invalidate_all_candidate_caches()
+    schedule_queue_refresh(user.id)
     return updated_profile
 
 
@@ -193,7 +292,8 @@ def delete_own_profile(telegram_id: str, db: Session = Depends(get_db)):
     profile = get_profile_or_404(db, user.id)
     crud.delete_profile(db, profile)
     recompute_rating(db, user.id)
-    cache.invalidate_candidate_cache(user.id)
+    schedule_rating_refresh([user.id])
+    cache.invalidate_all_candidate_caches()
     return schemas.MessageResponse(message="Анкета удалена.")
 
 
@@ -286,9 +386,17 @@ def like_current_candidate(telegram_id: str, db: Session = Depends(get_db)):
         is_match = True
 
     recompute_many(db, [user.id, candidate_user_id])
+    schedule_rating_refresh([user.id, candidate_user_id])
+    events.publish_interaction_event(
+        "profile_liked",
+        user.id,
+        candidate_user_id,
+        {"created": created, "is_match": is_match},
+    )
+    INTERACTIONS_TOTAL.labels("like", str(is_match).lower()).inc()
 
-    if cache.queue_state(user.id)["remaining_cached_candidates"] <= 1:
-        cache.refill_candidate_queue(db, user.id)
+    if cache.queue_state(user.id)["remaining_cached_candidates"] <= CANDIDATE_QUEUE_REFILL_THRESHOLD:
+        schedule_queue_refresh(user.id)
 
     next_candidate = get_next_candidate_response(db, user.id)
     like_notification = build_like_notification(db, user.id, candidate_user_id) if created else None
@@ -320,9 +428,17 @@ def skip_current_candidate(telegram_id: str, db: Session = Depends(get_db)):
 
     crud.record_skip(db, user.id, candidate_user_id)
     recompute_many(db, [user.id, candidate_user_id])
+    schedule_rating_refresh([user.id, candidate_user_id])
+    events.publish_interaction_event(
+        "profile_skipped",
+        user.id,
+        candidate_user_id,
+        {},
+    )
+    INTERACTIONS_TOTAL.labels("skip", "false").inc()
 
-    if cache.queue_state(user.id)["remaining_cached_candidates"] <= 1:
-        cache.refill_candidate_queue(db, user.id)
+    if cache.queue_state(user.id)["remaining_cached_candidates"] <= CANDIDATE_QUEUE_REFILL_THRESHOLD:
+        schedule_queue_refresh(user.id)
 
     next_candidate = get_next_candidate_response(db, user.id)
     return schemas.InteractionResponse(
@@ -375,4 +491,11 @@ def initiate_dialog(telegram_id: str, other_telegram_id: str, db: Session = Depe
 
     crud.record_dialog_initiation(db, match.id, user.id, other_user.id)
     recompute_many(db, [user.id, other_user.id])
+    schedule_rating_refresh([user.id, other_user.id])
+    events.publish_interaction_event(
+        "dialog_started",
+        user.id,
+        other_user.id,
+        {"match_id": match.id},
+    )
     return schemas.MessageResponse(message="Факт начала диалога сохранен.")

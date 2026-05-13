@@ -40,6 +40,7 @@ BTN_SKIP = "Пропустить"
 BTN_MATCHES = "Мои мэтчи"
 BTN_MY_LIKES = "Мои лайки"
 BTN_RATING = "Мой рейтинг"
+BTN_REFERRAL = "Пригласить друга"
 BTN_HELP = "Помощь"
 BTN_CANCEL = "Отмена"
 BTN_DIALOG = "Начать диалог"
@@ -111,7 +112,8 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text=BTN_MY_PROFILE), KeyboardButton(text=BTN_BROWSE)],
             [KeyboardButton(text=BTN_MATCHES), KeyboardButton(text=BTN_MY_LIKES)],
             [KeyboardButton(text=BTN_RATING), KeyboardButton(text=BTN_DIALOG)],
-            [KeyboardButton(text=BTN_DELETE_PROFILE), KeyboardButton(text=BTN_HELP)],
+            [KeyboardButton(text=BTN_REFERRAL), KeyboardButton(text=BTN_HELP)],
+            [KeyboardButton(text=BTN_DELETE_PROFILE)],
         ],
         resize_keyboard=True,
     )
@@ -178,6 +180,7 @@ async def configure_bot_commands() -> None:
         [
             BotCommand(command="start", description="Запустить бота"),
             BotCommand(command="help", description="Показать помощь"),
+            BotCommand(command="referral", description="Получить ссылку-приглашение"),
             BotCommand(command="cancel", description="Отменить текущее действие"),
         ]
     )
@@ -339,7 +342,8 @@ def rating_explanation_text(payload: dict) -> str:
         "Коротко: рейтинг складывается из двух частей.\n"
         f"Level 1 = заполненность анкеты ({payload['level1_score']:.1f}).\n"
         f"Level 2 = активность и реакции на тебя: лайки, мэтчи, диалоги ({payload['level2_score']:.1f}).\n"
-        f"Итоговый score = среднее этих двух значений ({payload['final_score']:.1f})."
+        f"Реферальный бонус = приглашенные друзья ({payload.get('referral_score', 0):.1f}).\n"
+        f"Итоговый score = 45% Level 1 + 45% Level 2 + 10% реферального бонуса ({payload['final_score']:.1f})."
     )
 
 
@@ -511,7 +515,7 @@ async def handle_profile_step(message: Message, state: FSMContext, current_field
     await continue_profile_form(message, state, next_index)
 
 
-async def register_user_in_backend(message: Message) -> bool:
+async def register_user_in_backend(message: Message, referrer_telegram_id: str | None = None) -> bool:
     telegram_id = telegram_id_from_message(message)
     username = message.from_user.username
 
@@ -519,7 +523,11 @@ async def register_user_in_backend(message: Message) -> bool:
         status, payload = await api_request(
             "POST",
             "/users/register",
-            json_data={"telegram_id": telegram_id, "username": username},
+            json_data={
+                "telegram_id": telegram_id,
+                "username": username,
+                "referrer_telegram_id": referrer_telegram_id,
+            },
         )
     except aiohttp.ClientError:
         logger.exception("Registration request failed for telegram_id=%s", telegram_id)
@@ -537,8 +545,12 @@ async def register_user_in_backend(message: Message) -> bool:
 
 
 @dp.message(CommandStart())
-async def start(message: Message):
-    if not await register_user_in_backend(message):
+async def start(message: Message, command: CommandObject):
+    referrer_telegram_id = command.args.strip() if command.args else None
+    if referrer_telegram_id == telegram_id_from_message(message):
+        referrer_telegram_id = None
+
+    if not await register_user_in_backend(message, referrer_telegram_id):
         return
 
     await message.answer(
@@ -563,6 +575,7 @@ async def help_command(message: Message):
         "• Ставить лайки и пропуски\n"
         "• Смотреть свои последние лайки\n"
         "• Смотреть мэтчи и рейтинг\n"
+        "• Приглашать друзей и получать реферальный бонус\n"
         "• Отметить начало диалога кнопкой `Начать диалог`\n\n"
         "Основные действия доступны кнопками под полем ввода.",
         reply_markup=main_menu_keyboard(),
@@ -756,8 +769,23 @@ async def rating_command(message: Message):
         "Твой рейтинг:\n"
         f"Level 1: {payload['level1_score']:.1f}\n"
         f"Level 2: {payload['level2_score']:.1f}\n"
+        f"Реферальный бонус: {payload.get('referral_score', 0):.1f}\n"
         f"Итоговый score: {payload['final_score']:.1f}\n\n"
         f"{rating_explanation_text(payload)}",
+        reply_markup=main_menu_keyboard(),
+    )
+
+
+@dp.message(F.text == BTN_REFERRAL)
+@dp.message(Command("referral"))
+async def referral_command(message: Message):
+    me = await bot.get_me()
+    telegram_id = telegram_id_from_message(message)
+    link = f"https://t.me/{me.username}?start={telegram_id}"
+    await message.answer(
+        "Твоя ссылка-приглашение:\n"
+        f"{link}\n\n"
+        "За приглашенных пользователей начисляется бонус к комбинированному рейтингу.",
         reply_markup=main_menu_keyboard(),
     )
 

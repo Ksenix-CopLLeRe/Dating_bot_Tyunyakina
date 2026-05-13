@@ -25,6 +25,18 @@ services:
       timeout: 5s
       retries: 10
 
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    restart: always
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   backend:
     build:
       context: .
@@ -33,6 +45,8 @@ services:
       db:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     env_file:
       - .env
@@ -43,6 +57,36 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+
+  celery_worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    command: celery -A backend.tasks:celery_app worker --loglevel=info
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    env_file:
+      - .env
+
+  celery_beat:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    command: celery -A backend.tasks:celery_app beat --loglevel=info
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    env_file:
+      - .env
 
   bot:
     build:
