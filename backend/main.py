@@ -12,6 +12,7 @@ from .background import schedule_queue_refresh, schedule_rating_refresh
 from .config import CANDIDATE_QUEUE_REFILL_THRESHOLD
 from .database import Base, SessionLocal, engine
 from .logging_config import configure_logging
+from .metrics import register_metrics_collector
 from .ranking import recompute_many, recompute_rating
 
 
@@ -79,6 +80,7 @@ INTERACTIONS_TOTAL = Counter(
     "Dating interactions grouped by action and match status.",
     ["action", "is_match"],
 )
+register_metrics_collector()
 
 
 @app.middleware("http")
