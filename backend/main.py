@@ -1,12 +1,13 @@
 import logging
 import time
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from botocore.exceptions import BotoCoreError, ClientError
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
-from . import cache, crud, events, schemas
+from . import cache, crud, events, schemas, storage
 from .background import schedule_queue_refresh, schedule_rating_refresh
 from .config import CANDIDATE_QUEUE_REFILL_THRESHOLD
 from .database import Base, SessionLocal, engine
@@ -172,19 +173,73 @@ def healthcheck(db: Session = Depends(get_db)):
     cache.redis_client.ping()
     broker_status = "connected" if events.check_mq_connection() else "unavailable"
     celery_status = cache.redis_client.get("celery:worker:heartbeat") or "no heartbeat yet"
-    status = "ok" if broker_status == "connected" else "degraded"
+    try:
+        storage.ensure_bucket_exists()
+        s3_status = "connected"
+    except Exception:
+        logger.exception("s3.healthcheck_failed")
+        s3_status = "unavailable"
+    status = "ok" if broker_status == "connected" and s3_status == "connected" else "degraded"
     return schemas.HealthResponse(
         status=status,
         database="connected",
         redis="connected",
         broker=broker_status,
         celery=celery_status,
+        s3=s3_status,
     )
 
 
 @app.get("/metrics", tags=["system"])
 def metrics():
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+@app.post(
+    "/profiles/{telegram_id}/photo",
+    response_model=schemas.PhotoUploadResponse,
+    tags=["profiles"],
+)
+async def upload_profile_photo(
+    telegram_id: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    get_user_or_404(db, telegram_id)
+    if file.content_type and not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Можно загружать только изображения.")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Пустой файл.")
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Фото должно быть не больше 5 МБ.")
+
+    try:
+        photo_url = storage.upload_profile_photo(
+            telegram_id=telegram_id,
+            content=content,
+            content_type=file.content_type,
+            filename=file.filename,
+        )
+    except Exception as exc:
+        logger.exception("s3.profile_photo_upload_failed", extra={"telegram_id": telegram_id})
+        raise HTTPException(status_code=503, detail="Не удалось сохранить фото в S3.") from exc
+
+    return schemas.PhotoUploadResponse(photo_url=photo_url)
+
+
+@app.get("/photos", tags=["profiles"])
+def get_profile_photo(key: str):
+    if not storage.is_s3_photo_reference(key):
+        raise HTTPException(status_code=400, detail="Некорректный ключ фото.")
+
+    try:
+        content, content_type = storage.download_photo(key)
+    except (BotoCoreError, ClientError) as exc:
+        raise HTTPException(status_code=404, detail="Фото не найдено в S3.") from exc
+
+    return Response(content=content, media_type=content_type)
 
 
 @app.post("/users/register", response_model=schemas.RegistrationResponse, tags=["users"])

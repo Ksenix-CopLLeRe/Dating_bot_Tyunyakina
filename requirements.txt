@@ -1,5 +1,6 @@
 aiogram==3.20.0.post0
 aiohttp==3.11.18
+boto3==1.35.99
 celery==5.4.0
 fastapi==0.115.12
 httpx==0.28.1
@@ -7,6 +8,7 @@ prometheus-client==0.21.1
 pydantic==2.11.4
 psycopg2-binary==2.9.10
 pytest==8.3.5
+python-multipart==0.0.20
 python-dotenv==1.1.0
 redis==5.2.1
 sqlalchemy==2.0.40

@@ -7,7 +7,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import BotCommand, KeyboardButton, Message, ReplyKeyboardMarkup
+from aiogram.types import BotCommand, BufferedInputFile, KeyboardButton, Message, ReplyKeyboardMarkup
 from dotenv import load_dotenv
 
 
@@ -215,6 +215,34 @@ async def api_request(
             return response.status, payload
 
 
+async def api_upload_photo(telegram_id: str, photo_bytes: bytes) -> tuple[int, dict]:
+    form = aiohttp.FormData()
+    form.add_field(
+        "file",
+        photo_bytes,
+        filename=f"profile-{telegram_id}.jpg",
+        content_type="image/jpeg",
+    )
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{BACKEND_URL}/profiles/{telegram_id}/photo",
+            data=form,
+            timeout=aiohttp.ClientTimeout(total=30),
+        ) as response:
+            payload = await response.json(content_type=None)
+            return response.status, payload
+
+
+async def api_download_photo(photo_key: str) -> tuple[int, bytes, str | None]:
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            f"{BACKEND_URL}/photos",
+            params={"key": photo_key},
+            timeout=aiohttp.ClientTimeout(total=30),
+        ) as response:
+            return response.status, await response.read(), response.headers.get("content-type")
+
+
 def telegram_id_from_message(message: Message) -> str:
     return str(message.from_user.id)
 
@@ -256,7 +284,7 @@ def build_profile_payload(data: dict) -> dict:
         "city": nullable_text(data.get("city")),
         "interests": nullable_text(data.get("interests")),
         "bio": nullable_text(data.get("bio")),
-        "photo_url": data.get("photo_file_id"),
+        "photo_url": data.get("photo_url"),
         "preferred_gender": nullable_value(data.get("preferred_gender")),
         "preferred_age_min": None
         if is_skipped(data.get("preferred_age_min"))
@@ -284,7 +312,7 @@ def build_single_field_payload(field_name: str, data: dict, current_profile: dic
     if field_name == "bio":
         return {"bio": nullable_text(data.get("bio"))}
     if field_name == "photo":
-        return {"photo_url": data["photo_file_id"]}
+        return {"photo_url": data.get("photo_url")}
     if field_name == "preferred_gender":
         return {"preferred_gender": nullable_value(data["preferred_gender"])}
     if field_name == "preferred_city":
@@ -431,14 +459,45 @@ async def send_like_notification(notification: dict | None) -> None:
     )
 
     if liker_profile.get("photo_url"):
-        await bot.send_photo(chat_id=int(recipient_telegram_id), photo=liker_profile["photo_url"], caption=caption)
-    else:
-        await bot.send_message(chat_id=int(recipient_telegram_id), text=caption)
+        try:
+            photo = await build_telegram_photo(liker_profile["photo_url"])
+            await bot.send_photo(chat_id=int(recipient_telegram_id), photo=photo, caption=caption)
+            return
+        except Exception:
+            logger.exception("Failed to send like notification photo")
+
+    await bot.send_message(chat_id=int(recipient_telegram_id), text=caption)
 
 
-async def send_profile_photo(message: Message, photo_file_id: str | None, caption: str) -> None:
-    if photo_file_id:
-        await message.answer_photo(photo=photo_file_id, caption=caption, reply_markup=main_menu_keyboard())
+async def build_telegram_photo(photo_reference: str) -> str | BufferedInputFile:
+    if photo_reference.startswith("profiles/"):
+        status, content, _content_type = await api_download_photo(photo_reference)
+        if status >= 400:
+            raise RuntimeError(f"Photo download failed with status {status}")
+        return BufferedInputFile(content, filename="profile-photo.jpg")
+    return photo_reference
+
+
+async def send_photo_or_text(
+    message: Message,
+    photo_reference: str | None,
+    caption: str,
+    reply_markup: ReplyKeyboardMarkup,
+) -> None:
+    if photo_reference:
+        try:
+            photo = await build_telegram_photo(photo_reference)
+            await message.answer_photo(photo=photo, caption=caption, reply_markup=reply_markup)
+            return
+        except Exception:
+            logger.exception("Failed to send profile photo")
+
+    await message.answer(caption, reply_markup=reply_markup)
+
+
+async def send_profile_photo(message: Message, photo_reference: str | None, caption: str) -> None:
+    if photo_reference:
+        await send_photo_or_text(message, photo_reference, caption, main_menu_keyboard())
     else:
         await message.answer(caption, reply_markup=main_menu_keyboard())
 
@@ -450,14 +509,7 @@ async def show_next_candidate(message: Message, candidate: dict | None) -> None:
 
     profile = candidate["profile"]
     caption = f"{format_candidate(candidate)}\n\nИспользуй кнопки `Лайк` или `Пропустить`."
-    if profile.get("photo_url"):
-        await message.answer_photo(
-            photo=profile["photo_url"],
-            caption=caption,
-            reply_markup=browse_keyboard(),
-        )
-    else:
-        await message.answer(caption, reply_markup=browse_keyboard())
+    await send_photo_or_text(message, profile.get("photo_url"), caption, browse_keyboard())
 
 
 async def continue_profile_form(message: Message, state: FSMContext, next_index: int) -> None:
@@ -909,7 +961,23 @@ async def profile_bio(message: Message, state: FSMContext):
 @dp.message(ProfileForm.photo, F.photo)
 async def profile_photo(message: Message, state: FSMContext):
     photo_file_id = message.photo[-1].file_id
-    await state.update_data(photo_file_id=photo_file_id)
+    telegram_id = telegram_id_from_message(message)
+    telegram_file = await bot.get_file(photo_file_id)
+    destination = await bot.download_file(telegram_file.file_path)
+    if destination is None:
+        await message.answer("Не удалось скачать фото из Telegram. Попробуй отправить фото еще раз.")
+        return
+
+    destination.seek(0)
+    status, payload = await api_upload_photo(telegram_id, destination.read())
+    if status >= 400:
+        await message.answer(
+            f"Не удалось сохранить фото в S3: {payload.get('detail', payload)}",
+            reply_markup=skip_or_cancel_keyboard(),
+        )
+        return
+
+    await state.update_data(photo_url=payload["photo_url"])
     data = await state.get_data()
     next_index = data["step_index"] + 1
     await continue_profile_form(message, state, next_index)
@@ -917,7 +985,7 @@ async def profile_photo(message: Message, state: FSMContext):
 
 @dp.message(ProfileForm.photo, F.text == BTN_SKIP_FIELD)
 async def profile_photo_skip(message: Message, state: FSMContext):
-    await state.update_data(photo_file_id=None)
+    await state.update_data(photo_url=None)
     data = await state.get_data()
     next_index = data["step_index"] + 1
     await continue_profile_form(message, state, next_index)

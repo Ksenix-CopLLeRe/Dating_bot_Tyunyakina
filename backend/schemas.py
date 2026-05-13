@@ -31,6 +31,7 @@ class HealthResponse(BaseModel):
     redis: str
     broker: str
     celery: str
+    s3: str
 
 
 class ProfileBase(BaseModel):
@@ -209,3 +210,7 @@ class QueueStateResponse(BaseModel):
 
 class MessageResponse(BaseModel):
     message: str
+
+
+class PhotoUploadResponse(BaseModel):
+    photo_url: str
