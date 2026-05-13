@@ -45,6 +45,7 @@ BTN_HELP = "Помощь"
 BTN_CANCEL = "Отмена"
 BTN_DIALOG = "Начать диалог"
 BTN_DONE = "Готово"
+BTN_SKIP_FIELD = "Пропустить"
 
 GENDER_WOMAN = "Женщина"
 GENDER_MAN = "Мужчина"
@@ -138,9 +139,19 @@ def cancel_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
+def skip_or_cancel_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=BTN_SKIP_FIELD)], [KeyboardButton(text=BTN_CANCEL)]],
+        resize_keyboard=True,
+    )
+
+
 def gender_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=GENDER_WOMAN), KeyboardButton(text=GENDER_MAN)]],
+        keyboard=[
+            [KeyboardButton(text=GENDER_WOMAN), KeyboardButton(text=GENDER_MAN)],
+            [KeyboardButton(text=BTN_SKIP_FIELD), KeyboardButton(text=BTN_CANCEL)],
+        ],
         resize_keyboard=True,
     )
 
@@ -149,7 +160,8 @@ def preference_gender_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=GENDER_WOMAN), KeyboardButton(text=GENDER_MAN)],
-            [KeyboardButton(text=PREF_ANY)],
+            [KeyboardButton(text=PREF_ANY), KeyboardButton(text=BTN_SKIP_FIELD)],
+            [KeyboardButton(text=BTN_CANCEL)],
         ],
         resize_keyboard=True,
     )
@@ -216,55 +228,61 @@ def normalize_choice(raw_value: str) -> str:
     return value.lower()
 
 
-def nullable_value(raw_value: str) -> str | None:
-    stripped = raw_value.strip()
-    if stripped in {"-", PREF_ANY}:
+def is_skipped(raw_value: str | None) -> bool:
+    if raw_value is None:
+        return True
+    return raw_value.strip() in {"-", PREF_ANY, BTN_SKIP_FIELD}
+
+
+def nullable_value(raw_value: str | None) -> str | None:
+    if is_skipped(raw_value):
         return None
+    stripped = raw_value.strip()
     return normalize_choice(stripped)
 
 
-def nullable_text(raw_value: str) -> str | None:
-    stripped = raw_value.strip()
-    if stripped in {"-", PREF_ANY}:
+def nullable_text(raw_value: str | None) -> str | None:
+    if is_skipped(raw_value):
         return None
+    stripped = raw_value.strip()
     return stripped
 
 
 def build_profile_payload(data: dict) -> dict:
     return {
-        "name": data["name"].strip(),
-        "age": int(data["age"]),
-        "gender": normalize_choice(data["gender"]),
-        "city": data["city"].strip(),
-        "interests": data["interests"].strip(),
-        "bio": data["bio"].strip(),
-        "photo_url": data["photo_file_id"],
-        "preferred_gender": nullable_value(data["preferred_gender"]),
+        "name": nullable_text(data.get("name")),
+        "age": None if is_skipped(data.get("age")) else int(data["age"]),
+        "gender": nullable_value(data.get("gender")),
+        "city": nullable_text(data.get("city")),
+        "interests": nullable_text(data.get("interests")),
+        "bio": nullable_text(data.get("bio")),
+        "photo_url": data.get("photo_file_id"),
+        "preferred_gender": nullable_value(data.get("preferred_gender")),
         "preferred_age_min": None
-        if data["preferred_age_min"].strip() in {"-", PREF_ANY}
+        if is_skipped(data.get("preferred_age_min"))
         else int(data["preferred_age_min"]),
         "preferred_age_max": None
-        if data["preferred_age_max"].strip() in {"-", PREF_ANY}
+        if is_skipped(data.get("preferred_age_max"))
         else int(data["preferred_age_max"]),
         "preferred_city": None
-        if data["preferred_city"].strip() in {"-", PREF_ANY}
+        if is_skipped(data.get("preferred_city"))
         else data["preferred_city"].strip(),
     }
 
 
 def build_single_field_payload(field_name: str, data: dict, current_profile: dict | None = None) -> dict:
     if field_name == "name":
-        return {"name": data["name"].strip()}
+        return {"name": nullable_text(data.get("name"))}
     if field_name == "age":
-        return {"age": int(data["age"])}
+        return {"age": None if is_skipped(data.get("age")) else int(data["age"])}
     if field_name == "gender":
-        return {"gender": normalize_choice(data["gender"])}
+        return {"gender": nullable_value(data.get("gender"))}
     if field_name == "city":
-        return {"city": data["city"].strip()}
+        return {"city": nullable_text(data.get("city"))}
     if field_name == "interests":
-        return {"interests": data["interests"].strip()}
+        return {"interests": nullable_text(data.get("interests"))}
     if field_name == "bio":
-        return {"bio": data["bio"].strip()}
+        return {"bio": nullable_text(data.get("bio"))}
     if field_name == "photo":
         return {"photo_url": data["photo_file_id"]}
     if field_name == "preferred_gender":
@@ -273,14 +291,14 @@ def build_single_field_payload(field_name: str, data: dict, current_profile: dic
         return {"preferred_city": nullable_text(data["preferred_city"])}
     if field_name == "preferred_age_min":
         payload = {
-            "preferred_age_min": None if data["preferred_age_min"].strip() in {"-", PREF_ANY} else int(data["preferred_age_min"]),
+            "preferred_age_min": None if is_skipped(data.get("preferred_age_min")) else int(data["preferred_age_min"]),
         }
         if current_profile and current_profile.get("preferred_age_max") is not None:
             payload["preferred_age_max"] = current_profile["preferred_age_max"]
         return payload
     if field_name == "preferred_age_max":
         payload = {
-            "preferred_age_max": None if data["preferred_age_max"].strip() in {"-", PREF_ANY} else int(data["preferred_age_max"]),
+            "preferred_age_max": None if is_skipped(data.get("preferred_age_max")) else int(data["preferred_age_max"]),
         }
         if current_profile and current_profile.get("preferred_age_min") is not None:
             payload["preferred_age_min"] = current_profile["preferred_age_min"]
@@ -291,12 +309,12 @@ def build_single_field_payload(field_name: str, data: dict, current_profile: dic
 def format_profile(profile: dict) -> str:
     return (
         "Твоя анкета:\n"
-        f"Имя: {profile.get('name', 'не указано')}\n"
-        f"Возраст: {profile.get('age', 'не указан')}\n"
-        f"Пол: {profile.get('gender', 'не указан')}\n"
-        f"Город: {profile.get('city', 'не указан')}\n"
-        f"Интересы: {profile.get('interests', 'не указаны')}\n"
-        f"О себе: {profile.get('bio', 'не указано')}\n"
+        f"Имя: {profile.get('name') or 'не указано'}\n"
+        f"Возраст: {profile.get('age') or 'не указан'}\n"
+        f"Пол: {profile.get('gender') or 'не указан'}\n"
+        f"Город: {profile.get('city') or 'не указан'}\n"
+        f"Интересы: {profile.get('interests') or 'не указаны'}\n"
+        f"О себе: {profile.get('bio') or 'не указано'}\n"
         f"Предпочитаемый пол: {profile.get('preferred_gender') or 'без фильтра'}\n"
         f"Возраст кандидата: {profile.get('preferred_age_min') or '-'} - {profile.get('preferred_age_max') or '-'}\n"
         f"Предпочитаемый город: {profile.get('preferred_city') or 'без фильтра'}"
@@ -348,7 +366,7 @@ def rating_explanation_text(payload: dict) -> str:
 
 
 async def prompt_for_profile_field(message: Message, state: FSMContext, field_name: str) -> None:
-    reply_markup = cancel_keyboard()
+    reply_markup = skip_or_cancel_keyboard()
     if field_name == "gender":
         reply_markup = gender_keyboard()
     elif field_name == "preferred_gender":
@@ -481,6 +499,7 @@ async def start_profile_form(message: Message, state: FSMContext, mode: str) -> 
     await state.update_data(mode=mode, step_index=0)
     await message.answer(
         "Сейчас соберем анкету шаг за шагом.\n"
+        "Любой пункт можно оставить пустым кнопкой `Пропустить`.\n"
         "Если хочешь остановиться, нажми `Отмена`.",
         reply_markup=cancel_keyboard(),
     )
@@ -491,6 +510,13 @@ async def handle_profile_step(message: Message, state: FSMContext, current_field
     text = (message.text or "").strip()
     if not text:
         await message.answer("Нужно отправить текстовое значение.")
+        return
+
+    if text == BTN_SKIP_FIELD:
+        await state.update_data(**{current_field: None})
+        data = await state.get_data()
+        next_index = data["step_index"] + 1
+        await continue_profile_form(message, state, next_index)
         return
 
     if current_field == "gender" and text not in {GENDER_WOMAN, GENDER_MAN}:
@@ -506,7 +532,7 @@ async def handle_profile_step(message: Message, state: FSMContext, current_field
 
     if current_field in {"age", "preferred_age_min", "preferred_age_max"} and text not in {PREF_ANY, "-"}:
         if not text.isdigit():
-            await message.answer("Здесь нужно число или кнопка `Без фильтра`.")
+            await message.answer("Здесь нужно число, `Без фильтра` или `Пропустить`.")
             return
 
     await state.update_data(**{current_field: text})
@@ -886,9 +912,20 @@ async def profile_photo(message: Message, state: FSMContext):
     await continue_profile_form(message, state, next_index)
 
 
+@dp.message(ProfileForm.photo, F.text == BTN_SKIP_FIELD)
+async def profile_photo_skip(message: Message, state: FSMContext):
+    await state.update_data(photo_file_id=None)
+    data = await state.get_data()
+    next_index = data["step_index"] + 1
+    await continue_profile_form(message, state, next_index)
+
+
 @dp.message(ProfileForm.photo)
 async def profile_photo_invalid(message: Message):
-    await message.answer("Нужно отправить именно фотографию одним сообщением.", reply_markup=cancel_keyboard())
+    await message.answer(
+        "Нужно отправить фотографию одним сообщением или нажать `Пропустить`.",
+        reply_markup=skip_or_cancel_keyboard(),
+    )
 
 
 @dp.message(ProfileForm.preferred_gender)

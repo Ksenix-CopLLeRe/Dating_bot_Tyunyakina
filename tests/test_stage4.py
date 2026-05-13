@@ -179,3 +179,32 @@ def test_profile_age_range_validation(client):
         },
     )
     assert response.status_code == 422
+
+
+def test_profile_can_be_created_with_skipped_fields(client):
+    register(client, "300", "charlie")
+    response = client.post(
+        "/profiles/300",
+        json={
+            "name": "Charlie",
+            "age": None,
+            "gender": None,
+            "city": None,
+            "interests": None,
+            "bio": None,
+            "photo_url": None,
+            "preferred_gender": None,
+            "preferred_age_min": None,
+            "preferred_age_max": None,
+            "preferred_city": None,
+        },
+    )
+    assert response.status_code == 201, response.text
+    profile = response.json()
+    assert profile["name"] == "Charlie"
+    assert profile["age"] is None
+    assert profile["photo_url"] is None
+
+    rating_response = client.get("/ratings/300")
+    assert rating_response.status_code == 200
+    assert rating_response.json()["level1_score"] == 0.0

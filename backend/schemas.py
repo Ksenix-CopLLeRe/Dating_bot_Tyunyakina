@@ -34,13 +34,13 @@ class HealthResponse(BaseModel):
 
 
 class ProfileBase(BaseModel):
-    name: str = Field(min_length=1, max_length=128)
-    age: int = Field(ge=18, le=100)
-    gender: str = Field(min_length=1, max_length=32)
-    city: str = Field(min_length=1, max_length=128)
-    interests: str = Field(min_length=1, max_length=1000)
-    bio: str = Field(min_length=1, max_length=2000)
-    photo_url: str = Field(min_length=1, max_length=2048)
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    age: int | None = Field(default=None, ge=18, le=100)
+    gender: str | None = Field(default=None, min_length=1, max_length=32)
+    city: str | None = Field(default=None, min_length=1, max_length=128)
+    interests: str | None = Field(default=None, min_length=1, max_length=1000)
+    bio: str | None = Field(default=None, min_length=1, max_length=2000)
+    photo_url: str | None = Field(default=None, min_length=1, max_length=2048)
     preferred_gender: str | None = Field(default=None, max_length=32)
     preferred_age_min: int | None = Field(default=None, ge=18, le=100)
     preferred_age_max: int | None = Field(default=None, ge=18, le=100)
