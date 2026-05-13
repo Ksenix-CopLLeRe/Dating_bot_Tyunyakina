@@ -1,45 +1,426 @@
 # Dating Bot
 
-Telegram dating bot with a FastAPI backend, PostgreSQL storage, Redis candidate
-cache, RabbitMQ event bus and Celery background jobs.
+Telegram-бот для знакомств с backend на FastAPI. Пользователь регистрируется через Telegram, создает анкету, смотрит анкеты других пользователей, ставит лайки или пропускает кандидатов, получает мэтчи, видит свой рейтинг и может приглашать друзей по реферальной ссылке.
 
-## Stage 4 features
+Проект реализован как небольшая backend-система, а не только как бот: есть база данных, кэширование кандидатов, фоновые задачи, брокер сообщений, метрики, тесты и локальный запуск через Docker Compose.
 
-- Celery worker and beat tasks recalculate ratings, warm candidate queues and
-  publish worker heartbeats.
-- RabbitMQ receives domain events for registrations, likes, skips and dialog
-  starts through the `dating.events` exchange.
-- Redis stores pre-ranked candidate queues so browsing does not recompute the
-  full recommendation list on every request.
-- PostgreSQL schema includes indexes for profile matching, reactions, matches,
-  dialogs and ratings.
-- `/metrics` exposes Prometheus counters and histograms for API requests and
-  interactions.
-- Tests cover referral scoring, browsing, likes, matches, metrics and profile
-  validation.
-- GitHub Actions runs the test suite on every push or pull request.
+## Возможности
 
-## Local run
+- Регистрация пользователя по Telegram ID при `/start`.
+- Создание анкеты с возможностью пропускать поля.
+- Просмотр и обновление своей анкеты.
+- Удаление анкеты.
+- Подбор кандидатов с учетом рейтинга и совместимости.
+- Кэширование очереди кандидатов в Redis.
+- Лайки и пропуски анкет.
+- Автоматическое создание мэтча при взаимном лайке.
+- Просмотр последних лайков.
+- Просмотр мэтчей.
+- Отметка начала диалога после мэтча.
+- Рейтинг пользователя:
+  - Level 1: заполненность анкеты;
+  - Level 2: реакции и активность;
+  - referral score: приглашенные пользователи.
+- Реферальные ссылки через Telegram.
+- RabbitMQ-события для регистраций, лайков, пропусков и диалогов.
+- Celery-задачи для фонового пересчета рейтингов и прогрева очередей.
+- Prometheus-метрики на `/metrics`.
+- Healthcheck на `/health`.
+- Автотесты через pytest.
+- CI через GitHub Actions.
+- JMeter-план для нагрузочного тестирования.
 
-1. Copy `.env.example` to `.env` and set `BOT_TOKEN`.
-2. Start the stack:
+## Технологии
+
+- Python 3.11+
+- aiogram 3
+- FastAPI
+- SQLAlchemy
+- PostgreSQL
+- Redis
+- RabbitMQ
+- Celery
+- Prometheus client
+- pytest
+- Docker Compose
+
+## Структура проекта
+
+```text
+backend/
+  main.py             FastAPI-приложение и API endpoints
+  models.py           SQLAlchemy-модели таблиц
+  schemas.py          Pydantic-схемы запросов и ответов
+  crud.py             Работа с БД
+  ranking.py          Алгоритм рейтинга
+  cache.py            Redis-кэш очередей кандидатов
+  tasks.py            Celery-задачи
+  background.py       Безопасная отправка задач в Celery
+  events.py           Публикация событий в RabbitMQ
+  database.py         Подключение к БД
+  config.py           Переменные окружения
+  logging_config.py   Настройка логирования
+
+bot/
+  bot.py              Telegram-бот и пользовательские сценарии
+
+docker/
+  Dockerfile.backend
+  Dockerfile.bot
+
+docs/
+  performance.md
+  stage4-load-test.jmx
+  er-diagram.png
+
+tests/
+  test_stage4.py
+
+.github/workflows/
+  ci.yml
+```
+
+## Архитектура
+
+```text
+Telegram user
+    |
+    v
+bot/bot.py
+    |
+    v
+FastAPI backend
+    |
+    +--> PostgreSQL: пользователи, анкеты, лайки, мэтчи, рейтинги
+    |
+    +--> Redis: кэш предварительно отранжированных кандидатов
+    |
+    +--> RabbitMQ: события взаимодействий
+    |
+    +--> Celery worker: фоновые задачи
+```
+
+Backend отвечает за бизнес-логику, Telegram-бот отвечает за интерфейс пользователя. Redis ускоряет выдачу кандидатов, RabbitMQ делает систему событийной, Celery выносит периодические и фоновые операции из основного потока API.
+
+## Переменные окружения
+
+Создайте `.env` из примера:
+
+```bash
+cp .env.example .env
+```
+
+Для PowerShell:
+
+```powershell
+copy .env.example .env
+```
+
+Основные переменные:
+
+```env
+DATABASE_URL=postgresql+psycopg2://postgres:postgres@db:5432/dating_bot
+REDIS_URL=redis://redis:6379/0
+RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672//
+CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+CELERY_RESULT_BACKEND=redis://redis:6379/0
+BACKEND_URL=http://backend:8000
+BOT_TOKEN=replace_with_real_telegram_bot_token
+```
+
+Перед запуском обязательно укажите настоящий `BOT_TOKEN`.
+
+## Локальный запуск через Docker
 
 ```bash
 docker compose up --build
 ```
 
-Services:
+После запуска доступны:
 
-- backend API: `http://localhost:8000`
-- API docs: `http://localhost:8000/docs`
-- metrics: `http://localhost:8000/metrics`
-- RabbitMQ UI: `http://localhost:15672` (`guest` / `guest`)
+- FastAPI backend: `http://localhost:8000`
+- Swagger UI: `http://localhost:8000/docs`
+- Healthcheck: `http://localhost:8000/health`
+- Метрики: `http://localhost:8000/metrics`
+- RabbitMQ UI: `http://localhost:15672`
 
-## Tests
+Логин и пароль RabbitMQ:
+
+```text
+guest / guest
+```
+
+## Сервисы Docker Compose
+
+- `db` - PostgreSQL.
+- `redis` - Redis.
+- `rabbitmq` - RabbitMQ с management UI.
+- `backend` - FastAPI API.
+- `celery_worker` - Celery worker для фоновых задач.
+- `celery_beat` - Celery beat для регулярных задач.
+- `bot` - Telegram-бот.
+
+## Основные сценарии в Telegram
+
+1. Пользователь пишет `/start`.
+2. Бот регистрирует пользователя в backend.
+3. Пользователь нажимает `Создать анкету`.
+4. Пользователь заполняет поля анкеты или нажимает `Пропустить поле`.
+5. Пользователь нажимает `Смотреть анкеты`.
+6. Бот показывает кандидата.
+7. Пользователь нажимает `Лайк` или `Пропустить`.
+8. При взаимном лайке создается мэтч.
+9. Пользователь может открыть `Мои мэтчи`.
+10. Пользователь может отметить начало диалога командой `/open_dialog <telegram_id>`.
+11. Пользователь может посмотреть `Мой рейтинг`.
+12. Пользователь может получить реферальную ссылку через `Пригласить друга`.
+
+## API
+
+Полная интерактивная документация доступна после запуска:
+
+```text
+http://localhost:8000/docs
+```
+
+Основные endpoints:
+
+### System
+
+- `GET /` - информация о сервисе.
+- `GET /health` - проверка БД, Redis, RabbitMQ и Celery heartbeat.
+- `GET /metrics` - Prometheus-метрики.
+
+### Users
+
+- `POST /users/register` - регистрация пользователя.
+- `GET /users/by-telegram/{telegram_id}` - получение пользователя по Telegram ID.
+
+### Profiles
+
+- `POST /profiles/{telegram_id}` - создание анкеты.
+- `GET /profiles/{telegram_id}` - получение своей анкеты.
+- `PUT /profiles/{telegram_id}` - обновление анкеты.
+- `DELETE /profiles/{telegram_id}` - удаление анкеты.
+- `GET /profiles/{telegram_id}/candidate` - получить следующего кандидата.
+- `GET /profiles/{telegram_id}/queue-state` - состояние Redis-очереди кандидатов.
+
+### Interactions
+
+- `POST /interactions/{telegram_id}/like` - лайкнуть текущего кандидата.
+- `POST /interactions/{telegram_id}/skip` - пропустить текущего кандидата.
+
+### Matches
+
+- `GET /matches/{telegram_id}` - список мэтчей.
+- `POST /matches/{telegram_id}/dialogs/{other_telegram_id}` - отметить начало диалога.
+
+### Ratings
+
+- `GET /ratings/{telegram_id}` - получить рейтинг пользователя.
+
+### Likes
+
+- `GET /likes/{telegram_id}` - последние исходящие лайки пользователя.
+
+## Рейтинг
+
+Рейтинг рассчитывается в `backend/ranking.py`.
+
+Итоговая формула:
+
+```text
+final_score = 45% Level 1 + 45% Level 2 + 10% referral score
+```
+
+Level 1 оценивает заполненность анкеты:
+
+- возраст;
+- пол;
+- город;
+- интересы;
+- описание;
+- фото;
+- предпочтения по полу;
+- предпочтения по возрасту;
+- предпочтения по городу.
+
+Level 2 оценивает поведение:
+
+- сколько лайков получила анкета;
+- соотношение лайков и пропусков;
+- количество мэтчей;
+- количество начатых диалогов;
+- недавняя активность.
+
+Referral score начисляется за приглашенных пользователей.
+
+## Redis-кэш кандидатов
+
+При просмотре анкет backend не пересчитывает полный список кандидатов каждый раз. Он заранее формирует очередь подходящих пользователей и кладет ее в Redis.
+
+Код находится в:
+
+```text
+backend/cache.py
+```
+
+Главные функции:
+
+- `refill_candidate_queue`
+- `get_or_load_current_candidate_id`
+- `consume_current_candidate`
+- `invalidate_candidate_cache`
+- `invalidate_all_candidate_caches`
+
+## Celery
+
+Celery используется для задач, которые можно выполнять в фоне:
+
+- пересчет рейтинга одного пользователя;
+- пересчет рейтингов нескольких пользователей;
+- периодический пересчет всех рейтингов;
+- прогрев очередей кандидатов;
+- heartbeat worker для healthcheck.
+
+Код находится в:
+
+```text
+backend/tasks.py
+backend/background.py
+```
+
+## RabbitMQ
+
+RabbitMQ используется как брокер событий. Backend публикует события:
+
+- `user_registered`
+- `profile_liked`
+- `profile_skipped`
+- `dialog_started`
+
+Код находится в:
+
+```text
+backend/events.py
+```
+
+## Метрики и логирование
+
+Метрики доступны по адресу:
+
+```text
+http://localhost:8000/metrics
+```
+
+Собираются:
+
+- количество HTTP-запросов;
+- длительность HTTP-запросов;
+- количество лайков и пропусков;
+- информация о мэтчах в interaction-счетчике.
+
+Логирование настраивается в:
+
+```text
+backend/logging_config.py
+```
+
+## Тесты
+
+Установка зависимостей:
+
+```bash
+pip install -r requirements.txt
+```
+
+Запуск тестов:
 
 ```bash
 pytest -q
 ```
 
-The tests use SQLite, in-memory Redis and Celery eager mode, so they do not need
-Docker services.
+Тесты находятся в:
+
+```text
+tests/test_stage4.py
+```
+
+Они проверяют:
+
+- реферальный бонус;
+- создание неполной анкеты;
+- получение кандидата;
+- лайки;
+- мэтчи;
+- метрики;
+- валидацию возрастного диапазона.
+
+## CI
+
+GitHub Actions workflow находится здесь:
+
+```text
+.github/workflows/ci.yml
+```
+
+Он устанавливает зависимости и запускает:
+
+```bash
+pytest -q
+```
+
+## Нагрузочное тестирование
+
+Описание:
+
+```text
+docs/performance.md
+```
+
+JMeter-план:
+
+```text
+docs/stage4-load-test.jmx
+```
+
+Пример запуска:
+
+```bash
+jmeter -n -t docs/stage4-load-test.jmx -Jhost=localhost -Jport=8000 -Jthreads=25 -Jloops=20 -l load-results.jtl
+```
+
+## Проверка перед защитой
+
+1. Убедиться, что `.env` заполнен.
+2. Запустить проект:
+
+```bash
+docker compose up --build
+```
+
+3. Проверить:
+
+```text
+http://localhost:8000/docs
+http://localhost:8000/health
+http://localhost:8000/metrics
+http://localhost:15672
+```
+
+4. В Telegram пройти сценарий:
+
+- `/start`;
+- `Создать анкету`;
+- `Пропустить поле` на нескольких шагах;
+- `Смотреть анкеты`;
+- `Лайк`;
+- `Мои мэтчи`;
+- `Мой рейтинг`;
+- `Пригласить друга`.
+
+5. Запустить тесты:
+
+```bash
+pytest -q
+```

@@ -340,7 +340,6 @@ def format_candidate(candidate: dict) -> str:
         f"Интересы: {profile.get('interests')}\n"
         f"О себе: {profile.get('bio')}\n"
         f"{rating_text}\n"
-        f"Кэшировано кандидатов: {candidate.get('remaining_cached_candidates')}"
     )
 
 
