@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from kombu import Connection, Exchange, Producer
+from kombu import Connection, Exchange, Producer, Queue
 from kombu.exceptions import KombuError, OperationalError
 
 from .config import RABBITMQ_URL
@@ -13,6 +13,12 @@ from .config import RABBITMQ_URL
 logger = logging.getLogger(__name__)
 
 EVENT_EXCHANGE = Exchange("dating.events", type="topic", durable=True)
+NOTIFICATION_QUEUE = Queue(
+    "dating.notifications",
+    exchange=EVENT_EXCHANGE,
+    routing_key="dating.#",
+    durable=True,
+)
 
 
 def publish_interaction_event(

@@ -63,6 +63,7 @@ backend/
   events.py           Публикация событий в RabbitMQ
   storage.py          Загрузка и чтение фотографий из MinIO/S3
   metrics.py          Продуктовые метрики для Prometheus/Grafana
+  notification_service.py RabbitMQ consumer для Telegram-уведомлений
   database.py         Подключение к БД
   config.py           Переменные окружения
   logging_config.py   Настройка логирования
@@ -189,6 +190,7 @@ admin / admin
 - `backend` - FastAPI API.
 - `celery_worker` - Celery worker для фоновых задач.
 - `celery_beat` - Celery beat для регулярных задач.
+- `notification_service` - отдельный RabbitMQ consumer, который отправляет Telegram-уведомления.
 - `prometheus` - сборщик метрик с backend `/metrics`.
 - `grafana` - UI с готовым dashboard по рейтингу и активности.
 - `bot` - Telegram-бот.
@@ -361,10 +363,30 @@ RabbitMQ используется как брокер событий. Backend п
 - `profile_skipped`
 - `dialog_started`
 
+Эти события читает отдельный сервис `notification_service` через durable queue:
+
+```text
+dating.notifications
+```
+
+Поток:
+
+```text
+backend -> exchange dating.events -> queue dating.notifications -> notification_service -> Telegram
+```
+
+Notification service отправляет:
+
+- уведомление о лайке пользователю, которого лайкнули;
+- уведомление о мэтче;
+- уведомление о начале диалога;
+- уведомление пригласившему пользователю о регистрации по реферальной ссылке.
+
 Код находится в:
 
 ```text
 backend/events.py
+backend/notification_service.py
 ```
 
 ## Метрики и логирование

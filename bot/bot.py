@@ -759,10 +759,6 @@ async def like_command(message: Message):
         return
 
     await message.answer(payload["message"], reply_markup=browse_keyboard())
-    try:
-        await send_like_notification(payload.get("like_notification"))
-    except Exception:
-        logger.exception("Failed to send like notification")
     await show_next_candidate(message, payload.get("next_candidate"))
 
 

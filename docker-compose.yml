@@ -112,6 +112,21 @@ services:
     env_file:
       - .env
 
+  notification_service:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    command: python -m backend.notification_service
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    env_file:
+      - .env
+
   prometheus:
     image: prom/prometheus:v2.53.0
     restart: always
